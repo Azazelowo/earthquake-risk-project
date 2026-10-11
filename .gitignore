@@ -1,0 +1,69 @@
+# IDEs and editors
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# OS generated files
+.DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Logs
+*.log
+logs/
+
+# Runtime data
+pidfile
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage reports
+coverage/
+.lcov/*
+*.lcov
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Dependency directories
+node_modules/
+jspm_packages/
+bower_components/
+vendor/
+__pycache__/
+*.py[cod]
+*.class
+
+# Build outputs
+bin/
+obj/
+dist/
+build/
+out/
+target/
+*.class
+*.jar
+*.war
+*.ear
+
+# Packaging
+*.tar
+*.gz
+*.zip
+*.7z
+*.rar
+
+# Misc
+*.bak
+*.swp
+*~
+*.tmp
+*.temp

@@ -35,7 +35,8 @@
 5. 風險摘要將印至主控台，圖表將儲存於 `outputs/` 資料夾。
 
 ## 自動化工作流程
-- 每次推送至 `main` 分支時，GitHub Actions (`.github/workflows/risk-assessment.yml`) 會自動執行上述腳本，產出最新風險報告（PDF/HTML）作為 artefacts。
+- 每次推送至 `main` 或開 PR 時，GitHub Actions (`.github/workflows/risk-assessment.yml`) 會自動執行 `tests` job：安裝 `requirements.txt` 並以合成資料跑 `pipeline/tests` 的單元測試。
+- 上述 PowerShell 腳本需要 `earthquake_data/CWA_catalog.csv` 與 `precursor_data/`，這些資料不進版控，所以平常在本機執行；workflow 的 `risk-assessment` job 只能手動觸發，缺資料時會在第一步明確中止。
 
 ## 版控習慣
 - 完成有意義的腳本或文件後，執行 `git add`, `git commit -m "描述此次變更的目的"`, `git push`。

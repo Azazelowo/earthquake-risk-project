@@ -118,9 +118,9 @@ flowchart LR
 |---|---|---|
 | [01_build_catalog.py](../pipeline/src/01_build_catalog.py) | ✅ 已修正並重新產出 `events.parquet` | 原本 Gap 門檻寫 160、CWA 時間沒轉 UTC（差 8 小時）導致跨來源完全去不掉重複 [事實，已修正，見第 9 節] |
 | [02_clean_features.py](../pipeline/src/02_clean_features.py) | ⚠️ 程式已修正，**缺真實資料** | 原本的 `features.parquet` **確認是隨機假資料**（10 筆、單一網格、0–1 亂數）[事實]。現在沒有資料時會直接報錯；`--demo` 才產生固定種子的示範資料。只讀 CSV，RINEX 仍需先轉換 |
-| `03_train_backtest.py` | ❌ 不存在 | 甘特圖原排在 10/17–10/20 |
+| [03_train_backtest.py](../pipeline/src/03_train_backtest.py) | ✅ B3 基準模型已完成 | 見第 10 節 |
 | [scripts/*.ps1](../scripts) | ❌ 無法執行 | 見下表 |
-| [risk-assessment.yml](../.github/workflows/risk-assessment.yml) | ❌ 會失敗 | 資料沒進版控，第一步就會中止；`outputs\**` 在 Ubuntu runner 上是 Windows 路徑寫法 |
+| [risk-assessment.yml](../.github/workflows/risk-assessment.yml) | ✅ 已改寫 | `tests` job 在 push／PR 時以合成資料跑單元測試；PowerShell 流程改為手動觸發，缺資料時明確中止。原版引用不存在的 `powershell/setup-powershell` action，第一步就失敗 [事實] |
 | [notebooks/analysis.ipynb](../notebooks/analysis.ipynb) | 只有樣板 | 依賴不存在的 `outputs/risk_scores.csv` |
 
 PowerShell 腳本的具體問題 [事實]：

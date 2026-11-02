@@ -1,47 +1,79 @@
 name: Earthquake Risk Assessment
 
+# 兩個 job：
+# - tests：每次 push / PR 自動執行。只用合成資料，不需要任何原始資料。
+# - risk-assessment：PowerShell 版流程，只能手動觸發（Actions → Run workflow）。
+#   它需要 earthquake_data/CWA_catalog.csv 與 precursor_data/，這些資料不進版控，
+#   所以在 GitHub 上目前會在「Check input data」這一步明確中止；平常請在本機執行。
+
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 jobs:
+  tests:
+    runs-on: ubuntu-latest
+    env:
+      MPLBACKEND: Agg
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          # 與 requirements.txt 註明的測試版本一致
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests (synthetic data)
+        run: python -m unittest discover -s pipeline/tests -v
+
   risk-assessment:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     defaults:
       run:
+        # GitHub 的 Ubuntu runner 已內建 PowerShell 7，不需要另外安裝
         shell: pwsh
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Setup PowerShell
-        uses: powershell/setup-powershell@v1
-        with:
-          powershell-version: '7.4'
+      - name: Check input data
+        run: |
+          $missing = @('earthquake_data/CWA_catalog.csv', 'precursor_data') |
+            Where-Object { -not (Test-Path -LiteralPath $_) }
+          if ($missing) {
+            Write-Error ("缺少輸入資料（不進版控，請在本機執行）：" + ($missing -join ', '))
+            exit 1
+          }
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          python-version: '3.13'
 
       - name: Install dependencies
-        run: |
-          pip install --quiet pandas matplotlib seaborn folium
+        run: pip install --quiet pandas matplotlib seaborn folium
 
       - name: Run risk assessment pipeline
         run: |
-          .\scripts\Import-EarthquakeCatalog.ps1
-          .\scripts\Compute-Baseline.ps1
-          .\scripts\Ingest-Precursors.ps1
-          .\scripts\Risk-Scoring.ps1
-          .\scripts\Visualize-Results.ps1
+          ./scripts/Import-EarthquakeCatalog.ps1
+          ./scripts/Compute-Baseline.ps1
+          ./scripts/Ingest-Precursors.ps1
+          ./scripts/Risk-Scoring.ps1
+          ./scripts/Visualize-Results.ps1
 
       - name: Upload artefacts
         uses: actions/upload-artifact@v4
         with:
           name: risk-assessment-output
-          path: |
-            outputs\**
+          path: outputs/**

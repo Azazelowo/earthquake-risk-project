@@ -3,3 +3,7 @@
 pandas==3.1.0
 numpy==2.5.4
 pyarrow==26.0.0
+# pipeline/src/03_train_backtest.py (B3), case_ndh5_tec.py
+scikit-learn==1.9.1
+scipy==1.18.1
+matplotlib==3.11.2

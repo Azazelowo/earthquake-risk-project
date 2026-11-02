@@ -111,15 +111,20 @@ curl -s -m 30 -H "Authorization: $CWA_API_KEY" \
   "window_start": "YYYY-MM-DD",
   "window_end": "YYYY-MM-DD",
   "region_text": "原文地點描述",
+  "region_list": ["JP", "TW"],
   "lat": null, "lon": null, "radius_km": null,
   "mag_min": null, "mag_max": null,
   "claim_quote": "原文關鍵句（25 字內）",
+  "group_id": "<見 3.1 合併規則>",
   "status": "pending"
 }
 ```
 
 規則：
 - 原文沒寫的欄位一律填 `null`，**不可推測補值**；模糊描述（如「近期」「東部外海」）保留在 `region_text`，並在報告標註「無法量化」。
+- `region_list`：原文列出**國家或地區名稱**時，轉成 3.1「地區代碼表」的代碼；原文是點位或半徑時填 `null`，改填 `lat`／`lon`／`radius_km`。表中沒有的地名保留在 `region_text`，並在執行日誌註明「代碼表缺少：<地名>」，不要自行新增代碼。
+- 規模：原文只寫單一數值（如「M7.0」）且沒有「以上」等字眼時，`mag_min` 和 `mag_max` 都填該值；寫了「M7 以上」則 `mag_min = 7.0`、`mag_max = null`。
+- **欄位補齊**：已存在、但缺少 `region_list` 或 `group_id` 的 `pending` 紀錄，依本節和 3.1 的規則補上。這是唯一允許修改舊紀錄的情況（另一個是更新 `status`），並在執行日誌列出補了哪些 id。
 - 民間內容僅作為**比對輸入**，報告中不得當作事實陳述。
 
 ### 2.2 非常規多維物理因子
@@ -141,22 +146,68 @@ curl -s -m 30 -H "Authorization: $CWA_API_KEY" \
 
 ### 3.1 結算到期預測
 
-讀取 `data/predictions.jsonl` 中 `status = "pending"` 且 `window_end < TODAY` 的紀錄，對照 `data/events.jsonl`（不足時以 USGS API 補查該時間窗）：
+#### (a) 重複預測合併
+
+同一來源反覆發布同一模板的預測（例如每隔幾天就發一次「30 天內，某些國家，M7.0」），如果每筆各算一次，命中率會被灌水。所以：
+
+- `group_id` = `<source>-<region_list 排序後以 + 連接>-M<mag_min>-<窗口天數>d-<群組內最早的 window_start>`
+- 新紀錄的 source、`region_list`（或點位與半徑）、規模、窗口天數都和某個群組相同，**而且** `window_start ≤ 該群組第一筆的 window_end`，就加入該群組並沿用它的 `group_id`；否則自己開一個新群組
+- 只和**第一筆**比較，是為了避免定期重發的預測一直串連，導致群組永遠無法結算；這樣一個群組最長約涵蓋兩個窗口
+- **一個群組只結算一次**：等群組內**最晚**的 `window_end < TODAY` 才結算。合併窗口 = 最早的 `window_start` 到最晚的 `window_end`，群組內每筆的 `status` 都更新成同一個結果
+- `backtest.csv` 每個群組只寫一列，`prediction_id` 填 `group_id`
+- 累計統計（3.4）以**群組數**為準，另欄列出原始發文數
+
+#### (b) 判定空間是否符合
+
+1. 有 `lat`／`lon`：計算距離，≤ `radius_km`（未給則預設 100 km）就算符合。
+2. 有 `region_list`：事件符合下列任一條件，就算符合：
+   - USGS 事件的 `place` 字串（通常以「, 國名」結尾）含有代碼表中對應的英文名稱
+   - `place` 只寫海域名稱（如 "Banda Sea"、"Philippine Islands region"），而震央落在代碼表的**經緯度範圍**內
+   在 `backtest.csv` 的 `match_basis` 欄記錄依據（`place` 或 `bbox`）。經緯度範圍彼此有重疊，而且只是粗略涵蓋陸地和近海；以 `bbox` 判定時，要在報告註明「依粗略範圍判定」。
+
+**地區代碼表**（範圍含近海，數值為粗略涵蓋，只用於判定，不代表國界）：
+
+| 代碼 | 名稱 | USGS `place` 比對字串 | 緯度 | 經度 |
+|---|---|---|---|---|
+| JP | 日本 | Japan | 24 ~ 46 | 122 ~ 154 |
+| TW | 台灣 | Taiwan | 21 ~ 26.5 | 119 ~ 123.5 |
+| CN | 中國大陸 | China | 18 ~ 54 | 73 ~ 135 |
+| MM | 緬甸 | Myanmar | 9.5 ~ 28.5 | 92 ~ 101.5 |
+| NP | 尼泊爾 | Nepal | 26 ~ 30.5 | 80 ~ 88.5 |
+| PH | 菲律賓 | Philippines | 4 ~ 21.5 | 116 ~ 127.5 |
+| ID | 印尼 | Indonesia | -11.5 ~ 6.5 | 94.5 ~ 141.5 |
+| MY | 馬來西亞 | Malaysia | 0.5 ~ 7.5 | 99.5 ~ 119.5 |
+| PG | 巴布亞紐幾內亞 | Papua New Guinea | -12 ~ 0 | 140.5 ~ 156 |
+
+#### (c) 判定與記錄
+
+規模一律採用 USGS 的 preferred magnitude（優先 Mww），**不可**用 CWA ML 或 mb 去和 M7 等級的宣稱比較；在 `mag_type` 欄記錄所用的規模類型。
 
 | 判定 | 條件 |
 |---|---|
-| `hit` | 時間在窗口內、距離 ≤ `radius_km`（未給則預設 100 km）、規模落在宣稱範圍 ±0.5 |
-| `partial` | 三項條件中符合兩項 |
-| `miss` | 窗口內無符合事件 |
-| `unverifiable` | 預測缺乏可量化的時間、地點或規模 |
+| `hit` | 合併窗口內，有事件同時符合空間條件，且規模落在宣稱範圍 ±0.5 |
+| `partial` | 三項條件（時間、空間、規模）中符合兩項，例如窗口內同一地區有 M6.3，或其他地區有 M7 |
+| `miss` | 合併窗口內沒有符合兩項以上的事件 |
+| `unverifiable` | 時間、空間、規模中任何一項無法量化 |
 
-更新該筆 `status`，並追加一列到 `data/backtest.csv`：
-`prediction_id,source,window_start,window_end,matched_event_id,time_offset_h,distance_km,mag_error,status,checked_at`
+有多個符合的事件時，取規模誤差最小的一個，並在報告列出所有符合事件的數量。
+
+追加一列到 `data/backtest.csv`（檔案已存在但標頭是舊格式時，改用新標頭重寫該檔，保留舊資料列，缺少的欄位留空）：
+`prediction_id,source,raw_post_count,window_start,window_end,matched_event_id,match_basis,time_offset_h,distance_km,mag_type,mag_error,status,base_rate_p,checked_at`
 
 ### 3.2 基準率檢查（避免偽陽性）
 
-對每個 `hit`，估算「隨機猜測也會命中」的機率：以 USGS 查詢同區域、同半徑、同規模門檻在過去 10 年的年發生率，換算為該窗口長度內至少發生一次的機率（Poisson）。
-- 若基準機率 > 50%，標註「**命中不具鑑別力**」。
+對每個 `hit` 和 `partial`，估算「隨機猜測也會命中」的機率 `base_rate_p`：
+
+1. 規模門檻 = 宣稱下限 − 0.5（例如宣稱 M7.0，就用 M ≥ 6.5）。
+2. 查詢 USGS 過去 10 年（到 TODAY 為止）符合門檻的事件：
+   - 點位預測：用 `latitude`、`longitude`、`maxradiuskm` 查詢
+   - 地區清單：**每個代碼的經緯度範圍各查一次**，再以事件 `id` **去重**（範圍有重疊，不去重會重複計數），並同樣套用 (b) 的空間判定
+3. 年發生率 λ = 去重後事件數 ÷ 10；窗口長度 T（天）= 合併窗口的天數。
+4. `base_rate_p = 1 − exp(−λ × T / 365)`（Poisson，至少發生一次的機率）。
+5. `base_rate_p > 0.5` 時標註「**命中不具鑑別力**」；`> 0.9` 時標註「**幾乎必然命中，該預測沒有資訊量**」。
+
+報告中要寫出計算過程（事件數、λ、T、p），讓讀者可以重算。這項檢查在群組**結算當天**做一次即可，結果寫進 `backtest.csv` 的 `base_rate_p` 欄。
 
 ### 3.3 前兆指標對照
 
@@ -164,7 +215,7 @@ curl -s -m 30 -H "Authorization: $CWA_API_KEY" \
 
 ### 3.4 累計統計
 
-從 `data/backtest.csv` 計算各來源累計：預測數、hit／partial／miss／unverifiable 數、命中率。
+從 `data/backtest.csv` 計算各來源累計：**群組數**（另欄列原始發文數）、hit／partial／miss／unverifiable 數、命中率，以及「扣除不具鑑別力的命中後」的命中率。尚未結算的群組另列 pending 數與最近的結算日。
 
 ---
 

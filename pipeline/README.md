@@ -32,12 +32,22 @@ python pipeline\src\02_clean_features.py --demo   # 產生固定亂數種子的�
 
 | 步驟 | 輸入（`EQ_DATA_DIR` 底下） | 輸出（`pipeline/data/`） | 說明 |
 |---|---|---|---|
-| `01_build_catalog.py` | `E-A0073-002/*.xml`、`earthquake_data/raw/GDMS地震目錄_*.csv` | `events.parquet` | 統一轉成 UTC、Mc=2.0、來源內與跨來源去重、Gap≤110° |
+| `01_build_catalog.py` | `E-A0073-002/*.xml`、`earthquake_data/raw/GDMS地震目錄_*.csv` | `events.parquet` | 統一轉成 UTC、Mc=2.0、來源內與跨來源去重、標記特徵事件與目標事件（見下表） |
 | `02_clean_features.py` | `地震預測/地磁及地電流/*.csv`、`地震預測/電離層電子密度變化/*.csv` | `features.parquet`（`--demo` 時為 `features_DEMO.parquet`） | 0.2° 網格 × 日、滑動統計、IQR 去除離群值 |
 | `03_train_backtest.py` | — | — | 尚未實作 |
 
+### `events.parquet` 的兩個標記欄位
+
+| 欄位 | 條件 | 用途 | 筆數 |
+|---|---|---|---|
+| `use_for_features` | Gap ≤ 110° 或 Gap 未知 | 計算地震活動特徵（震頻、b 值等） | 124,776 |
+| `is_target` | ML ≥ 5.5，**不論 Gap** | 回測的目標事件 | 443 |
+
+**為什麼目標事件不看 Gap**：外海地震的測站只在陸地一側，Gap 本來就偏大。若用 Gap≤110 刪除目標事件，
+443 筆會只剩 240 筆，被刪掉的 203 筆中有 173 筆在東部外海（例如 2004 年 ML 7.1，Gap 243°），
+模型會系統性地看不到外海大地震。Gap 過大但規模不到 5.5 的事件，兩種用途都用不到，所以不輸出。
+
 ## 已知限制
 
-- **Gap≤110° 會刪掉 46% 的 ML≥5.5 事件**（443 → 240），其中 85% 在東部外海。門檻是否改成「只用於特徵、不用於目標事件」尚待決定。
 - `02_clean_features.py` 只讀 CSV；`地震預測/測地法/` 底下的 RINEX（`.24o`）要先轉成 TEC 的 CSV。
 - `02_clean_features.py` 的權重與 `CASCADE_K` 都是暫定值，尚未經過回測校準。

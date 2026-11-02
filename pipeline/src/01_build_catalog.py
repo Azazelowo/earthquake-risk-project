@@ -6,7 +6,12 @@
 3. 來源內去重：時間取到分鐘＋經緯度取到小數 4 位＋規模取到 0.1。
 4. 跨來源去重：CWA 與 GDMS 在 MATCH_SECONDS 秒、MATCH_DEG 度內視為同一事件，保留 GDMS
    （GDMS 有方位角空隙 gap 等定位品質欄位）。
-5. 定位品質篩選：gap <= GAP_MAX；gap 未知（CWA XML 沒有此欄位）的事件保留，並標記為「未知」。
+5. 定位品質標記：gap <= GAP_MAX（或 gap 未知）的事件標記 use_for_features = True，
+   只有這些事件可以拿來計算地震活動特徵。
+6. 目標事件：ML >= TARGET_ML 的事件標記 is_target = True，不論 gap 都保留。
+   外海大地震的 gap 通常偏大（測站只在陸地一側），若用 gap 刪除，
+   模型會系統性地看不到東部外海的大地震。
+7. 兩者皆非的事件（gap > GAP_MAX 的小地震）不輸出。
 
 所有時間一律為 UTC（不帶時區的 datetime）。
 
@@ -23,7 +28,8 @@ import pandas as pd
 
 # ========== 參數（對應期初提案） ==========
 MC = 2.0             # 完備規模
-GAP_MAX = 110        # 方位角空隙上限（度）
+GAP_MAX = 110        # 方位角空隙上限（度），只用於特徵事件
+TARGET_ML = 5.5      # 回測目標事件的規模門檻
 MATCH_SECONDS = 60   # 跨來源視為同一事件的時間容許差（秒）
 MATCH_DEG = 0.3      # 跨來源視為同一事件的經緯度容許差（度）
 
@@ -114,7 +120,9 @@ def gap_quality(g):
         return "未知"
     if g <= 90:
         return "優"
-    return "可"
+    if g <= GAP_MAX:
+        return "可"
+    return "差"
 
 
 def main():
@@ -145,8 +153,14 @@ def main():
     df, n_cross = dedup_cross_source(df)
     print(f"跨來源去重：移除 {n_cross} 筆 CWA 重複事件，剩 {len(df)}")
 
-    df = df[df["gap"].isna() | (df["gap"] <= GAP_MAX)].copy()
-    print(f"Gap <= {GAP_MAX}（含未知）：{len(df)}")
+    df["use_for_features"] = df["gap"].isna() | (df["gap"] <= GAP_MAX)
+    df["is_target"] = df["ml"] >= TARGET_ML
+    n_dropped = int((~df["use_for_features"] & ~df["is_target"]).sum())
+    df = df[df["use_for_features"] | df["is_target"]].copy()
+    print(f"移除 gap > {GAP_MAX} 且 ML < {TARGET_ML} 的事件 {n_dropped} 筆，剩 {len(df)}")
+    print(f"  特徵事件（gap <= {GAP_MAX} 或未知）：{int(df['use_for_features'].sum())}")
+    print(f"  目標事件（ML >= {TARGET_ML}，不論 gap）：{int(df['is_target'].sum())}，"
+          f"其中 gap > {GAP_MAX}：{int((df['is_target'] & ~df['use_for_features']).sum())}")
 
     df["gap_quality"] = df["gap"].apply(gap_quality)
     df = df.sort_values("time").reset_index(drop=True)
@@ -158,9 +172,8 @@ def main():
     print(f"完成，共 {len(df)} 筆事件，輸出至 {output_path}")
     print("來源分布：")
     print(df["source"].value_counts())
-    print("定位品質分布（優 <=90°、可 90–110°、未知 = 無 gap 欄位）：")
+    print(f"定位品質分布（優 <=90°、可 90–{GAP_MAX}°、差 >{GAP_MAX}°、未知 = 無 gap 欄位）：")
     print(df["gap_quality"].value_counts())
-    print("ML >= 5.5 事件數：", int((df["ml"] >= 5.5).sum()))
 
 
 if __name__ == "__main__":

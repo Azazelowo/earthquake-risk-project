@@ -15,13 +15,15 @@
 3. **切換到報告分支**（報告與回測資料只存在 `daily-reports` 分支，`main` 只放程式與提示）：
    ```bash
    git fetch origin
+   WT="$(mktemp -d)/wt"   # 暫存目錄，不動使用者的工作目錄
    if git ls-remote --exit-code --heads origin daily-reports >/dev/null; then
-     git checkout -B daily-reports origin/daily-reports
+     git worktree add -B daily-reports "$WT" origin/daily-reports
    else
-     git checkout -b daily-reports
+     git worktree add -b daily-reports "$WT" origin/main
    fi
+   cd "$WT"
    ```
-   之後讀寫 `data/` 都以這個分支的內容為準（上一次執行累積的回測資料在這裡）。
+   之後所有讀寫都在 `$WT` 內進行，`data/` 以這個分支的內容為準（上一次執行累積的回測資料在這裡）。
 4. 專案根目錄下的資料位置（不存在就建立）：
    - `reports/YYYY/TODAY.md` — 今日報告
    - `data/predictions.jsonl` — 民間預測與前兆紀錄（回測資料庫，**只追加或更新狀態，不刪除**）
@@ -29,6 +31,10 @@
    - `data/backtest.csv` — 比對結果彙總
 5. 若 `reports/YYYY/TODAY.md` 已存在（同日重跑），覆寫報告，但 `data/` 內的紀錄要以 `id` 去重，不可重複寫入。
 6. 語言：繁體中文（台灣用語），專有名詞可保留英文。
+7. **執行環境可能是 Windows（Git Bash）**，系統預設編碼為 cp950：
+   - 每個 Bash 指令開頭先 `export PYTHONIOENCODING=utf-8`
+   - Python 讀寫檔案一律寫明 `open(path, encoding="utf-8")`，JSONL 寫入時用 `json.dumps(obj, ensure_ascii=False)`
+   - 不要在使用者的工作目錄直接切換分支；用 `git worktree add` 在暫存目錄操作 `daily-reports`，完成後 `git worktree remove`
 
 ---
 
@@ -59,6 +65,11 @@
 
 來源優先序：期刊官網（AGU、Nature、Science、SSA、GJI、Elsevier）＞ arXiv `physics.geo-ph` ＞ 研究機構新聞稿。
 每篇記錄：標題、作者／機構、日期、一句話結論、**證據等級**（同儕審查／預印本／新聞稿）、連結。
+**最低檢索要求**（每次都要做完，不可只搜一次）：
+- 三個主題**各自**至少搜尋 2 次（一次英文、一次中文或換關鍵字），查詢中加上當年年份（例如 `2026`）以避開舊資料
+- 讀取 arXiv 最新清單：`https://arxiv.org/list/physics.geo-ph/recent`，挑出與上述主題相關的條目
+- 只收錄發表或上線日期在過去 7 天內的項目；日期不明或較舊的不列入表格，可在執行日誌註明「搜尋結果皆為舊資料」
+
 若無新論文，直接寫「本期無新增」，**不要補湊**。
 
 ---
@@ -67,7 +78,12 @@
 
 ### 2.1 民間預測來源
 
-- `https://quakeforecast.blogspot.com/`：讀取過去 7 天的新文章
+- quakeforecast（台灣地震預測研究所）：首頁由 JavaScript 載入，直接抓首頁**讀不到文章**。改用 Blogger 的 feed：
+  ```bash
+  curl -s -m 30 "https://quakeforecast.blogspot.com/feeds/posts/default?alt=rss&max-results=15" -o qf.xml
+  ```
+  用 Python 解析 `<item>` 的 `title`、`link`、`pubDate`、`description`（內文為 HTML，需去標籤），篩出過去 7 天的文章。
+  若 feed 失敗，再試 `https://quakeforecast.blogspot.com/feeds/posts/default`（Atom）；兩者都失敗才在執行日誌註明。
 - 「rock map 專案」：以關鍵字搜尋其最新發文；若無法確定是哪個網站，於執行日誌註明「來源無法辨識」，不要猜測
 
 每則預測抽取成結構化紀錄，寫入 `data/predictions.jsonl`：
@@ -100,6 +116,8 @@
 | 太陽耀斑 | NOAA SWPC（GOES X-ray flares） | M／X 級耀斑時間與等級 |
 | 大氣電場／空氣電壓 | 以搜尋找公開監測站或研究討論 | 有資料才記錄，並註明來源可信度 |
 | 降雨／水文負載 | CWA 雨量觀測、颱風／豪雨紀錄 | 台灣過去 7 天顯著降雨事件、累積雨量 |
+
+表中**四項都要實際嘗試取得**，不可跳過；拿不到資料時，在報告該小節寫明「已嘗試的來源與失敗原因」，而不是省略整節。
 
 每項標註：**已確認的觀測值** vs **與地震關聯的主張**（後者需註明屬於「理論」或「推測」，以及目前主流學界的態度）。
 
@@ -182,6 +200,8 @@
 - [ ] 民間預測只出現在第二、三區塊，且未被寫成事實
 - [ ] `data/` 內沒有重複 `id`
 - [ ] 抓取失敗的來源已寫入執行日誌，而非被省略
+- [ ] 覆蓋率：1.2 的三個主題都至少搜尋 2 次、arXiv 清單已讀；2.1 的 feed 已嘗試；2.2 的四項因子都有對應小節
+- [ ] 若 quakeforecast feed 有過去 7 天的文章，`predictions.jsonl` 卻沒有新增，要說明原因（例如文章不含可量化預測）
 
 ## 6. 完成後
 

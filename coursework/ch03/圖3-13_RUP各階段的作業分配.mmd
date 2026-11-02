@@ -1,0 +1,52 @@
+flowchart LR
+    subgraph Inception
+        direction TB
+        I1[Business Modeling]:::active
+        I2[Requirements]:::active
+        I3[Analysis & Design]:::less
+        I4[Implementation]:::less
+        I5[Test]:::less
+        I6[Deployment]:::less
+        I7[Configuration & Change Management]:::less
+        I8[Project Management]:::active
+        I9[Environment]:::less
+    end
+    subgraph Elaboration
+        direction TB
+        E1[Business Modeling]:::less
+        E2[Requirements]:::active
+        E3[Analysis & Design]:::active
+        E4[Implementation]:::active
+        E5[Test]:::active
+        E6[Deployment]:::less
+        E7[Configuration & Change Management]:::less
+        E8[Project Management]:::active
+        E9[Environment]:::less
+    end
+    subgraph Construction
+        direction TB
+        C1[Business Modeling]:::less
+        C2[Requirements]:::less
+        C3[Analysis & Design]:::less
+        C4[Implementation]:::active
+        C5[Test]:::active
+        C6[Deployment]:::less
+        C7[Configuration & Change Management]:::less
+        C8[Project Management]:::active
+        C9[Environment]:::less
+    end
+    subgraph Transition
+        direction TB
+        T1[Business Modeling]:::less
+        T2[Requirements]:::less
+        T3[Analysis & Design]:::less
+        T4[Implementation]:::less
+        T5[Test]:::active
+        T6[Deployment]:::active
+        T7[Configuration & Change Management]:::active
+        T8[Project Management]:::active
+        T9[Environment]:::less
+    end
+    classDef active fill:#ff9,stroke:#333;
+    classDef less fill:#cfc,stroke:#333;
+

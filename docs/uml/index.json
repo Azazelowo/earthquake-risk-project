@@ -1,0 +1,50 @@
+{
+  "title": "震災風險評估專題 - UML 系統分析與設計文件",
+  "sections": [
+    {
+      "num": "1",
+      "name": "用例圖",
+      "file": "01_use_case_diagram.mmd"
+    },
+    {
+      "num": "2",
+      "name": "類別圖",
+      "file": "02_class_diagram.mmd"
+    },
+    {
+      "num": "3",
+      "name": "循序圖",
+      "file": "03_sequence_diagram.mmd"
+    },
+    {
+      "num": "4",
+      "name": "活動圖",
+      "file": "04_activity_diagram.mmd"
+    },
+    {
+      "num": "5",
+      "name": "元件圖",
+      "file": "05_component_diagram.mmd"
+    },
+    {
+      "num": "6",
+      "name": "部署圖",
+      "file": "06_deployment_diagram.mmd"
+    },
+    {
+      "num": "7",
+      "name": "狀態機圖",
+      "file": "07_state_machine_diagram.mmd"
+    },
+    {
+      "num": "8",
+      "name": "需求規格表",
+      "file": "08_requirements_table.md"
+    },
+    {
+      "num": "9",
+      "name": "資料字典",
+      "file": "09_data_dictionary.md"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+classDiagram
+    class Shape {
+        <<Abstract>>
+        +draw()
+    }
+    class Circle {
+        +radius: float
+        +draw()
+    }
+    class Square {
+        +side: float
+        +draw()
+    }
+    Shape <|-- Circle
+    Shape <|-- Square

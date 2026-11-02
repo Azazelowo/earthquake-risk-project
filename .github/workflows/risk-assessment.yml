@@ -1,0 +1,47 @@
+name: Earthquake Risk Assessment
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  risk-assessment:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup PowerShell
+        uses: powershell/setup-powershell@v1
+        with:
+          powershell-version: '7.4'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --quiet pandas matplotlib seaborn folium
+
+      - name: Run risk assessment pipeline
+        run: |
+          .\scripts\Import-EarthquakeCatalog.ps1
+          .\scripts\Compute-Baseline.ps1
+          .\scripts\Ingest-Precursors.ps1
+          .\scripts\Risk-Scoring.ps1
+          .\scripts\Visualize-Results.ps1
+
+      - name: Upload artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: risk-assessment-output
+          path: |
+            outputs\**

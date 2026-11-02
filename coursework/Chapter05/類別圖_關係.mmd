@@ -1,0 +1,5 @@
+classDiagram
+    Student "1" --> "*" Course : enrols
+    Course "1" --> "*" Professor : teaches
+    Course "1" --> "1" Textbook : uses
+

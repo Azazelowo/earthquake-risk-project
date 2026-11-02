@@ -1,0 +1,20 @@
+classDiagram
+    class Animal {
+        <<Abstract>>
+        +name: string
+        +age: int
+        +makeSound()
+        +move()
+    }
+    class Dog {
+        +breed: string
+        +makeSound()
+        +fetch()
+    }
+    class Cat {
+        +color: string
+        +makeSound()
+        +climb()
+    }
+    Animal <|-- Dog
+    Animal <|-- Cat

@@ -1,0 +1,132 @@
+classDiagram
+    %% 核心領域類別
+    class EarthquakeRecord {
+        +String originTime
+        +Double latitude
+        +Double longitude
+        +Double ml
+        +Double depth
+        +String referenceSource
+        +String region
+        +DateTime dateTime
+        +validate()
+        +toFeatureVector()
+    }
+    
+    class PrecursorRecord {
+        +DateTime observationTime
+        +String sourceType
+        +Double value
+        +Double latitude
+        +Double longitude
+        +DateTime obsTime
+        +String source
+        +normalize()
+        +getQualityFlag()
+    }
+    
+    class Baseline {
+        +Double baselineML
+        +Double baselineDepth
+        +Double baselineDailyRate
+        +DateTime calculationDate
+        +Int daysUsed
+        +calculate(catalog)
+        +saveToJson()
+        +loadFromJson()
+    }
+    
+    class RiskScore {
+        +DateTime timestamp
+        +Double riskScorePercent
+        +Double baselineScorePercent
+        +Double increasePercent
+        +String top3Contributors
+        +String summary
+        +calculate(features, weights, baseline)
+        +generateSummary()
+        +exportToCsv()
+    }
+    
+    class WeightConfig {
+        +Double weightGPS
+        +Double weightMAG
+        +Double weightGW
+        +Double weightTEC
+        +Double weightPRESS
+        +Double weightRAIN
+        +Double weightTIDAL
+        +validateSum()
+        +adjustFromHistory()
+    }
+    
+    class DataIngestionPipeline {
+        +String catalogPath
+        +String precursorDir
+        +String outputDir
+        +runImportCatalog()
+        +runComputeBaseline()
+        +runIngestPrecursors()
+        +runRiskScoring()
+        +runVisualize()
+        +executeFullPipeline()
+    }
+    
+    class VisualizationEngine {
+        +String riskScoreCsv
+        +String outputDir
+        +generateTimeSeries()
+        +generateHeatmap()
+        +generateMap()
+        +saveAllCharts()
+    }
+    
+    class HistoricalValidator {
+        +List~EarthquakeRecord~ historicalEvents
+        +List~RiskScore~ predictions
+        +Double hitRate
+        +Double missRate
+        +Double falseAlarmRate
+        +validate(minMagnitude, daysBefore)
+        +calculateMetrics()
+        +generateReport()
+    }
+    
+    %% 關聯關係
+    DataIngestionPipeline --> EarthquakeRecord : 建立
+    DataIngestionPipeline --> PrecursorRecord : 建立
+    DataIngestionPipeline --> Baseline : 產生
+    DataIngestionPipeline --> RiskScore : 產生
+    DataIngestionPipeline --> WeightConfig : 使用
+    DataIngestionPipeline --> VisualizationEngine : 呼叫
+    
+    Baseline <|-- RiskScore : 參考
+    WeightConfig <|-- RiskScore : 使用
+    EarthquakeRecord <|-- HistoricalValidator : 驗證資料
+    RiskScore <|-- HistoricalValidator : 預測資料
+    PrecursorRecord <|-- RiskScore : 特徵來源
+    
+    %% 介面
+    class IDataSource {
+        <<interface>>
+        +load()
+        +validate()
+        +getSchema()
+    }
+    
+    class IScorer {
+        <<interface>>
+        +score(features)
+        +getContributors()
+    }
+    
+    class IVisualizer {
+        <<interface>>
+        +plot(data)
+        +save(path)
+    }
+    
+    IDataSource <|.. EarthquakeRecord
+    IDataSource <|.. PrecursorRecord
+    IScorer <|.. RiskScore
+    IVisualizer <|.. VisualizationEngine

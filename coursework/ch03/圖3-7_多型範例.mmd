@@ -1,0 +1,15 @@
+classDiagram
+    class Scorer {
+        <<interface>>
+        +score(features: Map<String, Double>): Double
+    }
+    class WeightedSumScorer {
+        +weightConfig: WeightConfig
+        +score(features: Map<String, Double>): Double
+    }
+    class RuleBasedScorer {
+        +thresholds: Map<String, Double>
+        +score(features: Map<String, Double>): Double
+    }
+    Scorer <|.. WeightedSumScorer
+    Scorer <|.. RuleBasedScorer

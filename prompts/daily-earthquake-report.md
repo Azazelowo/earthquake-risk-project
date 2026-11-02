@@ -15,6 +15,10 @@
 3. **切換到報告分支**（報告與回測資料只存在 `daily-reports` 分支，`main` 只放程式與提示）：
    ```bash
    git fetch origin
+   # 清掉前次執行殘留、仍佔用 daily-reports 的 worktree（否則下一行會失敗）
+   git worktree prune
+   OLD=$(git worktree list --porcelain | awk '/^worktree /{p=$2} /^branch refs\/heads\/daily-reports$/{print p}')
+   [ -n "$OLD" ] && git worktree remove --force "$OLD"
    WT="$(mktemp -d)/wt"   # 暫存目錄，不動使用者的工作目錄
    if git ls-remote --exit-code --heads origin daily-reports >/dev/null; then
      git worktree add -B daily-reports "$WT" origin/daily-reports
@@ -222,4 +226,5 @@ curl -s -m 30 -H "Authorization: $CWA_API_KEY" \
    git push origin daily-reports
    ```
    push 失敗（例如遠端有新 commit）時，先 `git pull --rebase origin daily-reports` 再重試一次；仍失敗就在摘要中說明。
+   push 成功後移除 worktree：`cd` 回原目錄，執行 `git worktree remove "$WT"`。
 2. 在對話最後輸出 5 行以內的摘要：今日顯著地震數、新增預測數、結算結果、報告檔案路徑、push 是否成功。

@@ -1,0 +1,19 @@
+$
+classDiagram
+    class EarthquakeRecord {
+        -originTime: String
+        -latitude: Double
+        -longitude: Double
+        -ml: Double
+        -depth: Double
+        -referenceSource: String
+        -region: String
+        +DateTime: DateTime
+        +validate(): Boolean
+        +toFeatureVector(): List<Double>
+        +getOriginTime(): String
+        +getLatitude(): Double
+        +getLongitude(): Double
+        +getMl(): Double
+        +getDepth(): Double
+    }

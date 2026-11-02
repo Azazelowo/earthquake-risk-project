@@ -1,0 +1,16 @@
+$
+flowchart LR
+    A[需求] --> B[設計]
+    B --> C[實作]
+    C --> D[測試]
+    D --> E[部署]
+    E --> F[維護]
+    style A fill:#dfd,stroke:#332
+    style B fill:#dfd,stroke:#332
+    style C fill:#dfd,stroke:#332
+    style D fill:#f99,stroke:#332
+    style E fill:#f99,stroke:#332
+    style F fill:#f99,stroke:#332
+    classDef risk fill:#f99,stroke:#330;
+    class D,E,F risk;
+

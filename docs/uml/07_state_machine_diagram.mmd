@@ -1,0 +1,74 @@
+stateDiagram-v2
+    [*] --> Idle : 系統初始化
+
+    Idle --> Importing : 啟動管道 / 排程触發
+    Importing --> ValidatingCatalog : 讀取 CSV 完成
+    ValidatingCatalog --> ImportFailed : 缺少必要欄位或格式錯誤
+    ValidatingCatalog --> ComputingBaseline : 驗證通過
+
+    ImportFailed --> Idle : 修正資料後重試
+
+    ComputingBaseline --> BaselineSaved : 計算完成並寫入 JSON
+    BaselineSaved --> IngestingPrecursors : 触發前騨整合
+
+    IngestingPrecursors --> NormalizingTime : 讀取至少一類前騨資料
+    NormalizingTime --> MergingPrecursors : 時間戳統一完成
+    MergingPrecursors --> PrecursorsSaved : 合併儲存完成
+    PrecursorsSaved --> FeatureEngineering : 進入特影工程
+
+    FeatureEngineering --> FeaturesSaved : 正規化完成並輸出 CSV
+    FeaturesSaved --> ScoringRisk : 開始風險評分
+
+    ScoringRisk --> CalculatingScore : 載入特影與權重
+    CalculatingScore --> FindingContributors : 分數計算完成
+    FindingContributors --> GeneratingSummary : 找出前 3 大貨獲
+    GeneratingSummary --> ScoresSaved : 摘要生成並儲存 CSV
+
+    ScoresSaved --> Visualizing : 触發視覚化
+    Visualizing --> GeneratingCharts : Python 繪圖執行中
+    GeneratingCharts --> ChartsSaved : 圖表輸出完成
+
+    ChartsSaved --> ValidatingHistory : 触發歷史驗證
+    ValidatingHistory --> CalculatingMetrics : 載入歷史地震與預測
+    CalculatingMetrics --> CheckingThresholds : 指標計算完成
+
+    CheckingThresholds --> AdjustingWeights : 指標不達標 (命中率低/漏報率高)
+    AdjustingWeights --> ScoringRisk : 更新權重後重新評分
+
+    CheckingThresholds --> Completed : 指標達標
+
+    Completed --> Idle : 等待下一次排程
+
+    state ImportFailed {
+        [*] --> LogError
+        LogError --> NotifyUser
+        NotifyUser --> [*]
+    }
+
+    state AdjustingWeights {
+        [*] --> AnalyzeFalsePositives
+        AnalyzeFalsePositives --> AnalyzeFalseNegatives
+        AnalyzeFalseNegatives --> OptimizeWeights
+        OptimizeWeights --> SaveNewConfig
+        SaveNewConfig --> [*]
+    }
+
+    note right of Idle
+        系統待機狀態
+        等待手動触發或
+        GitHub Actions 排程
+    end note
+
+    note right of ScoringRisk
+        核心計算狀態
+        Weighted Sum: Σ(norm × weight) × 100
+        輸出: 基於 X、Y、Z 覲察，
+        區域風險上升 N%
+    end note
+
+    note right of ValidatingHistory
+        自我驗證機制
+        對照歷史 M>=5.5 地震
+        計算命中率/漏報率/誤報率
+        1/3/7 天前分數檢查
+    end note

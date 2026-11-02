@@ -1,0 +1,94 @@
+flowchart TD
+    subgraph Presentation [表現層]
+        CLI[PowerShell CLI\n腳本介面]
+        Notebook[Jupyter Notebook\n探索性分析]
+        Report[Markdown 報告\n自動生成]
+    end
+    
+    subgraph Application [應用層]
+        Pipeline[DataIngestionPipeline\n管道編排器]
+        ScoringEngine[RiskScoringEngine\n風險評分引擎]
+        ValidationEngine[HistoricalValidator\n歷史驗證引擎]
+        VisualizationEngine[VisualizationEngine\n視覺化引擎]
+    end
+    
+    subgraph Domain [領域層]
+        Earthquake[EarthquakeRecord\n地震紀錄實體]
+        Precursor[PrecursorRecord\n前驅觀測實體]
+        Baseline[Baseline\n基線值物件]
+        RiskScore[RiskScore\n風險分數物件]
+        WeightConfig[WeightConfig\n權重配置]
+    end
+    
+    subgraph Infrastructure [基礎設施層]
+        CSVReader[CSVReader\nCSV 讀取器]
+        JSONHandler[JSONHandler\nJSON 處理器]
+        PythonBridge[PythonBridge\nPython 呼叫橋接]
+        FileSystem[FileSystem\n檔案系統存取]
+        GitHubActions[GitHubActions\nCI/CD 執行環境]
+    end
+    
+    subgraph External [外部系統]
+        CWA_API[CWA 地震目錄 API]
+        NSRC_GNSS[NSRC GNSS/CORS\nGPS 變形資料]
+        MOI_Magnetic[國防部地磁觀測站]
+        WRA_Groundwater[水資源署地下水監測]
+        FORMOSAT[FORMOSAT-5/COSMIC\n離電層 TEC]
+        CWA_Weather[CWA 氣象站\n氣壓、雨量]
+        NARI_Tidal[海洋研究院潮汐模型]
+        SeismoStrain[地震研究所應變儀]
+    end
+    
+    %% 相依關係
+    CLI --> Pipeline
+    Notebook --> ScoringEngine
+    Notebook --> ValidationEngine
+    Report --> ValidationEngine
+    
+    Pipeline --> Earthquake
+    Pipeline --> Precursor
+    Pipeline --> Baseline
+    Pipeline --> RiskScore
+    Pipeline --> WeightConfig
+    Pipeline --> ScoringEngine
+    Pipeline --> ValidationEngine
+    Pipeline --> VisualizationEngine
+    
+    ScoringEngine --> RiskScore
+    ScoringEngine --> WeightConfig
+    ScoringEngine --> Baseline
+    ScoringEngine --> Precursor
+    
+    ValidationEngine --> Earthquake
+    ValidationEngine --> RiskScore
+    ValidationEngine --> WeightConfig
+    
+    VisualizationEngine --> RiskScore
+    VisualizationEngine --> PythonBridge
+    
+    Pipeline --> CSVReader
+    Pipeline --> JSONHandler
+    Pipeline --> FileSystem
+    ScoringEngine --> CSVReader
+    ScoringEngine --> JSONHandler
+    ValidationEngine --> CSVReader
+    VisualizationEngine --> CSVReader
+    VisualizationEngine --> FileSystem
+    
+    CSVReader --> CWA_API
+    CSVReader --> NSRC_GNSS
+    CSVReader --> MOI_Magnetic
+    CSVReader --> WRA_Groundwater
+    CSVReader --> FORMOSAT
+    CSVReader --> CWA_Weather
+    CSVReader --> NARI_Tidal
+    CSVReader --> SeismoStrain
+    
+    GitHubActions --> CLI
+    GitHubActions --> FileSystem
+    
+    style Presentation fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    style Application fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px
+    style Domain fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    style Infrastructure fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+    style External fill:#fce4ec,stroke:#c2185b,stroke-width:2px

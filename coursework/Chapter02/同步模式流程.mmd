@@ -1,0 +1,13 @@
+$
+flowchart TD
+    A[開始] --> B{並行執行}
+    B --> C[需求分析]
+    B --> D[系統設計]
+    C --> E[實作]
+    D --> E
+    E --> F[測試]
+    F --> G[部署]
+    G --> H[結束]
+    style A fill:#f9f,stroke:#333
+    style H fill:#ccf,stroke:#333
+

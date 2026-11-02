@@ -1,0 +1,44 @@
+erDiagram
+    GEVENT ||..|| OBSERVATION : records
+    GEVENT ||..|| RISK_RESULT : produces
+    OBSERVATION ||..|| STATION : measured_at
+    STATION |||..|{ LOCATION : located
+    RISK_RESULT }|..|| USER : viewed_by
+    GEVENT {
+        string id PK
+        datetime occurrence_time
+        float magnitude
+        float depth
+        string location
+    }
+    OBSERVATION {
+        string id PK
+        string event_id FK
+        string type
+        float value
+        datetime timestamp
+    }
+    STATION {
+        string id PK
+        string name
+        string code
+    }
+    LOCATION {
+        string id PK
+        string description
+        float latitude
+        float longitude
+    }
+    RISK_RESULT {
+        string id PK
+        string event_id FK
+        float risk_score
+        string level
+        datetime eval_time
+    }
+    USER {
+        string id PK
+        string name
+        string role
+    }
+

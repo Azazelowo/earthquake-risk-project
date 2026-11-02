@@ -1,0 +1,73 @@
+flowchart TD
+    subgraph LocalDev [本地開發環境]
+        DevMachine[開發者電腦\nWindows 10/11]
+        PS[PowerShell 5.1+]
+        Python[Python 3.11+]
+        Pandas[Python: pandas]
+        Matplotlib[Python: matplotlib/seaborn]
+        Folium[Python: folium]
+        Git[Git CLI]
+    end
+    
+    subgraph CI_CD [GitHub Actions CI/CD]
+        Runner[Ubuntu Latest Runner]
+        PS_CI[PowerShell 7.4]
+        Python_CI[Python 3.11]
+        Deps_CI[依賴套件\npandas, matplotlib, seaborn, folium]
+        Artifacts[Artifacts 儲存\noutputs/**]
+    end
+    
+    subgraph DataSources [外部資料來源]
+        CWA_Catalog[CWA 地震目錄\nCSV 下載]
+        GPS_Data[NSRC GNSS/CORS\nGPS 變形 CSV]
+        Mag_Data[國防部地磁觀測站\n地磁 CSV]
+        GW_Data[水資源署\n地下水位 CSV]
+        TEC_Data[FORMOSAT-5/COSMIC\nTEC CSV]
+        Pressure_Data[CWA 氣象站\n氣壓 CSV]
+        Rain_Data[CWA 雨量測站\n雨量 CSV]
+        Tidal_Data[海洋研究院\n潮汐模型 CSV]
+        Strain_Data[地震研究所\n應變/傾斜 CSV]
+    end
+    
+    subgraph Storage [儲存]
+        LocalFS[本地檔案系統\n./earthquake_data/, ./outputs/]
+        GitRepo[GitHub Repository\n原始碼、文件、工作流程]
+        ActionArtifacts[GitHub Artifacts\n風險報告、圖表]
+    end
+    
+    %% 連線關係
+    DevMachine --> PS
+    DevMachine --> Python
+    Python --> Pandas
+    Python --> Matplotlib
+    Python --> Folium
+    DevMachine --> Git
+    DevMachine --> LocalFS
+    DevMachine --> GitRepo
+    
+    GitRepo --> Runner
+    Runner --> PS_CI
+    Runner --> Python_CI
+    Python_CI --> Deps_CI
+    Runner --> LocalFS
+    Runner --> ActionArtifacts
+    
+    CWA_Catalog --> LocalFS
+    GPS_Data --> LocalFS
+    Mag_Data --> LocalFS
+    GW_Data --> LocalFS
+    TEC_Data --> LocalFS
+    Pressure_Data --> LocalFS
+    Rain_Data --> LocalFS
+    Tidal_Data --> LocalFS
+    Strain_Data --> LocalFS
+    
+    LocalFS --> DevMachine
+    LocalFS --> Runner
+    
+    ActionArtifacts --> GitRepo
+    
+    style LocalDev fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    style CI_CD fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px
+    style DataSources fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    style Storage fill:#fff3e0,stroke:#ef6c00,stroke-width:2px

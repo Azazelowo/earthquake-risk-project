@@ -1,0 +1,21 @@
+graph TD
+    %% External Entities
+    CWA[中央氣象署 (CWA) 地震目錄] -->|提供| System[震災風險評估系統]
+    GPS[NSRC GPS 變形資料] -->|提供| System
+    MAG[國防部地磁觀測] -->|提供| System
+    GW[水資源署地下水層] -->|提供| System
+    TEC[FORMOSAT-5/COSMIC 離電層 TEC] -->|提供| System
+    PRESS[CWA 氣壓] -->|提供| System
+    RAIN[CWA 雨量] -->|提供| System
+    TIDAL[海洋研究院 潮汐/水載荷] -->|提供| System
+    STRAIN[地震研究所 地殼應變/應力] -->|提供| System
+    Researcher[研究者 / 使用者] -->|觸發 & 查看| System
+    System -->|產出| Outputs[風險摘要文字\\時間序列圖\\熱力圖\\地圖熱力圖\\驗證報告]
+    System -->|記錄| Logs[執行日誌\\錯誤訊息]
+    classDef external fill:#f9f,stroke:#333;
+    classDef system fill:#cfc,stroke:#333;
+    classDef output fill:#bbf,stroke:#333;
+    class CWA,GPS,MAG,GW,TEC,PRESS,RAIN,TIDAL,STRAIN external;
+    class System system;
+    class Outputs,Logs output;
+

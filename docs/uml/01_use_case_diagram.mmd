@@ -1,0 +1,53 @@
+flowchart TD
+    %% Actors
+    Researcher[研究員 / 專題學生]
+    Scheduler[排程器 / GitHub Actions]
+    ExternalAPI[外部資料 API]
+    
+    %% System boundary
+    subgraph System [震災風險評估系統]
+        UC1[UC-01: 匯入地震目錄]
+        UC2[UC-02: 計算基線值]
+        UC3[UC-03: 整合前驅資料]
+        UC4[UC-04: 風險評分計算]
+        UC5[UC-05: 產生風險摘要]
+        UC6[UC-06: 視覺化輸出]
+        UC7[UC-07: 歷史驗證]
+        UC8[UC-08: 參數調整]
+        UC9[UC-09: 自動化排程執行]
+    end
+    
+    %% Relationships
+    Researcher --> UC1
+    Researcher --> UC2
+    Researcher --> UC3
+    Researcher --> UC4
+    Researcher --> UC5
+    Researcher --> UC6
+    Researcher --> UC7
+    Researcher --> UC8
+    
+    Scheduler --> UC9
+    UC9 --> UC1
+    UC9 --> UC2
+    UC9 --> UC3
+    UC9 --> UC4
+    UC9 --> UC5
+    UC9 --> UC6
+    
+    ExternalAPI --> UC1
+    ExternalAPI --> UC3
+    
+    UC1 --> UC2
+    UC2 --> UC3
+    UC3 --> UC4
+    UC4 --> UC5
+    UC4 --> UC6
+    UC5 --> UC7
+    UC7 --> UC8
+    UC8 --> UC4
+    
+    style System fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    style Researcher fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    style Scheduler fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    style ExternalAPI fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px

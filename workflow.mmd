@@ -1,0 +1,9 @@
+flowchart TD
+    A[Input: 原始 CSV 地震目錄與前驅資料] --> B[Analysis: Import-EarthquakeCatalog]
+    B --> C[Analysis: Compute-Baseline]
+    C --> D[Analysis: Ingest-Precursors]
+    D --> E[Validation: 與歷史 M≥5.5 地震比對，計算命中率/漏報率]
+    E --> F[Refinement: 調整權重或規則]
+    F --> G[Output: 風險摘要 + 圖表 (時間序列、熱力圖、地圖)]
+    style A fill:#f9f,stroke:#333,stroke-width:2px
+    style G fill:#bbf,stroke:#333,stroke-width:2px

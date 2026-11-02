@@ -49,7 +49,18 @@
 | USGS | `https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime=<UTC 24h 前>&minmagnitude=4.5` | 全球 M4.5+ 事件 |
 | USGS | 同上，加上 `minlatitude=21&maxlatitude=26.5&minlongitude=119&maxlongitude=123.5&minmagnitude=3` | 台灣周邊事件 |
 | CWA 地震測報中心 | `https://scweb.cwa.gov.tw/` | 顯著有感地震報告、餘震序列說明、活動分析新聞稿 |
-| CWA 開放資料 | `https://opendata.cwa.gov.tw/`（資料集 E-A0015-001 顯著有感地震報告；需授權碼） | 若環境變數 `CWA_API_KEY` 存在則使用，否則改用網頁 |
+| CWA 開放資料 | `https://opendata.cwa.gov.tw/api/v1/rest/datastore/<資料集>`（需授權碼） | 若環境變數 `CWA_API_KEY` 存在則使用（取得震央座標），否則改用網頁 |
+
+CWA 開放資料用法（僅在 `CWA_API_KEY` 有值時）：
+```bash
+curl -s -m 30 -H "Authorization: $CWA_API_KEY" \
+  "https://opendata.cwa.gov.tw/api/v1/rest/datastore/E-A0015-001?format=JSON" -o cwa_eq.json   # 顯著有感地震報告
+curl -s -m 30 -H "Authorization: $CWA_API_KEY" \
+  "https://opendata.cwa.gov.tw/api/v1/rest/datastore/E-A0016-001?format=JSON" -o cwa_eq_local.json   # 小區域有感地震報告
+```
+若回傳 401／403 或欄位結構不符預期，改用網頁並在執行日誌註明。
+
+**授權碼保密**：`CWA_API_KEY` 的值**絕對不可**寫入報告、`data/`、執行日誌、commit 訊息或任何會被 push 的檔案；指令中只能以 `$CWA_API_KEY` 引用，不可 echo 出來。
 
 整理項目：
 - 時間（UTC+8）、震央、深度、規模（註明 ML / Mw）、最大震度
@@ -84,7 +95,6 @@
   ```
   用 Python 解析 `<item>` 的 `title`、`link`、`pubDate`、`description`（內文為 HTML，需去標籤），篩出過去 7 天的文章。
   若 feed 失敗，再試 `https://quakeforecast.blogspot.com/feeds/posts/default`（Atom）；兩者都失敗才在執行日誌註明。
-- 「rock map 專案」：以關鍵字搜尋其最新發文；若無法確定是哪個網站，於執行日誌註明「來源無法辨識」，不要猜測
 
 每則預測抽取成結構化紀錄，寫入 `data/predictions.jsonl`：
 
@@ -115,7 +125,7 @@
 | Kp 指數／地磁擾動 | NOAA SWPC `https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json`；GFZ Potsdam Kp | 24h 最大 Kp、是否達 G1 以上磁暴 |
 | 太陽耀斑 | NOAA SWPC（GOES X-ray flares） | M／X 級耀斑時間與等級 |
 | 大氣電場／空氣電壓 | 以搜尋找公開監測站或研究討論 | 有資料才記錄，並註明來源可信度 |
-| 降雨／水文負載 | CWA 雨量觀測、颱風／豪雨紀錄 | 台灣過去 7 天顯著降雨事件、累積雨量 |
+| 降雨／水文負載 | 有 `CWA_API_KEY` 時用資料集 O-A0002-001（自動雨量站）；否則搜尋 CWA 豪雨特報、颱風消息 | 台灣過去 7 天顯著降雨事件、累積雨量 |
 
 表中**四項都要實際嘗試取得**，不可跳過；拿不到資料時，在報告該小節寫明「已嘗試的來源與失敗原因」，而不是省略整節。
 

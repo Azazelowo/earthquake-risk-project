@@ -1,9 +1,8 @@
 graph TD
-    subgraph 「網路」
+    subgraph net["網路"]
         A[用戶端裝置] --> B[伺服器]
     end
-    subgraph 「伺服器」
+    subgraph srv["伺服器"]
         B --> C[應用程式伺服器]
         B --> D[資料庫伺服器]
     end
-

@@ -1,4 +1,3 @@
-$
 flowchart LR
     I[初始階段] -->|迭代| I2[初始階段]
     I2 --> E[精化階段]
@@ -8,17 +7,11 @@ flowchart LR
     C2 --> T[移轉階段]
     T -->|迭代| T2[移轉階段]
     T2 --> I
-    note right of I
-        初始階段：完成需求與基本架構
-        （如建立資料結構、基本匯入腳本）
-    end
-    note right of E
-        精化階段：風險評分核心演算法與基線計算
-    end
-    note right of C
-        建構階段：完整管道整合、視覺化與驗證模組
-    end
-    note right of T
-        移轉階段：自動化部署、文件撰寫與最終測試
-    end
-    style I,E,C,T fill:#f9f,stroke:#333
+    nI["初始階段：完成需求與基本架構<br/>（如建立資料結構、基本匯入腳本）"] -.- I
+    nE["精化階段：風險評分核心演算法與基線計算"] -.- E
+    nC["建構階段：完整管道整合、視覺化與驗證模組"] -.- C
+    nT["移轉階段：自動化部署、文件撰寫與最終測試"] -.- T
+    classDef phase fill:#f9f,stroke:#333
+    classDef note fill:#fffbe6,stroke:#d4b106,stroke-dasharray:3 3
+    class I,E,C,T phase
+    class nI,nE,nC,nT note

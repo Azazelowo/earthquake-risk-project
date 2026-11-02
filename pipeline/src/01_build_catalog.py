@@ -1,129 +1,167 @@
-import pandas as pd
+"""01_build_catalog.py：整併 CWA XML 與 GDMS CSV 地震目錄，輸出 events.parquet。
+
+處理順序：
+1. 讀取 CWA XML（台灣時間 +08:00）與 GDMS CSV（UTC），統一轉成 UTC。
+2. 完備規模篩選：ML >= MC。
+3. 來源內去重：時間取到分鐘＋經緯度取到小數 4 位＋規模取到 0.1。
+4. 跨來源去重：CWA 與 GDMS 在 MATCH_SECONDS 秒、MATCH_DEG 度內視為同一事件，保留 GDMS
+   （GDMS 有方位角空隙 gap 等定位品質欄位）。
+5. 定位品質篩選：gap <= GAP_MAX；gap 未知（CWA XML 沒有此欄位）的事件保留，並標記為「未知」。
+
+所有時間一律為 UTC（不帶時區的 datetime）。
+
+路徑：
+- 原始資料從 EQ_DATA_DIR 讀取（預設為專案根目錄），方便資料放在 git 之外。
+- 輸出寫到專案根目錄的 pipeline/data/。
+"""
+import os
 from pathlib import Path
 import xml.etree.ElementTree as ET
-import re
+
 import numpy as np
+import pandas as pd
+
+# ========== 參數（對應期初提案） ==========
+MC = 2.0             # 完備規模
+GAP_MAX = 110        # 方位角空隙上限（度）
+MATCH_SECONDS = 60   # 跨來源視為同一事件的時間容許差（秒）
+MATCH_DEG = 0.3      # 跨來源視為同一事件的經緯度容許差（度）
+
+BASE_DIR = Path(__file__).resolve().parents[2]
+DATA_DIR = Path(os.environ.get("EQ_DATA_DIR", BASE_DIR))
+
 
 def parse_cwa_xml(xml_path):
-    """解析 CWA XML 目錄，回傳 DataFrame"""
-    tree = ET.parse(xml_path)
-    root = tree.getroot()
+    """解析 CWA XML 目錄，回傳 DataFrame（time 為 UTC）。"""
+    root = ET.parse(xml_path).getroot()
     rows = []
-    # Find all EarthquakeInfo elements (assuming default namespace)
     for eq in root.findall(".//{*}EarthquakeInfo"):
-        origin = eq.findtext("{*}OriginTime")
         lat = eq.findtext("{*}EpicenterLatitude")
         lon = eq.findtext("{*}EpicenterLongitude")
         depth = eq.findtext("{*}FocalDepth")
         ml = eq.findtext("{*}LocalMagnitude")
-        # AzimuthalGap not in XML, set as NaN
         gap_text = eq.findtext("{*}AzimuthalGap")
-        if gap_text is not None and gap_text.strip() != '':
-            try:
-                gap = float(gap_text)
-            except:
-                gap = np.nan
-        else:
+        try:
+            gap = float(gap_text) if gap_text and gap_text.strip() else np.nan
+        except ValueError:
             gap = np.nan
-        event_id = eq.findtext("{*}EarthquakeNo")  # may not exist
-        # Strip timezone offset if present (e.g., +08:00)
-        if origin:
-            origin = re.sub(r'\s*[+-]\d{2}:\d{2}$', '', origin)
         rows.append({
-            "time": origin,
+            # 保留原始時區字串（例如 1999-09-21T01:47:16+08:00），稍後統一轉 UTC
+            "time": eq.findtext("{*}OriginTime"),
             "lat": float(lat) if lat is not None else None,
             "lon": float(lon) if lon is not None else None,
             "depth": float(depth) if depth is not None else None,
             "ml": float(ml) if ml is not None else None,
             "gap": gap,
             "source": "CWA_XML",
-            "event_id": event_id,
+            "event_id": eq.findtext("{*}EarthquakeNo"),
         })
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    # 原本的程式直接切掉 +08:00，造成 CWA 比 GDMS 快 8 小時、同一事件無法去重。
+    # 這裡先轉成 UTC 再去掉時區資訊，才能和 GDMS（UTC）對齊。
+    df["time"] = pd.to_datetime(df["time"], utc=True, errors="coerce").dt.tz_convert(None)
+    return df
+
 
 def parse_gdms_csv(csv_path):
-    """解析 GDMS CSV，欄位名稱對應到統一格式"""
+    """解析 GDMS CSV（時間為 UTC），欄位對應到統一格式。"""
     df = pd.read_csv(csv_path)
-    # Expected columns: date,time,lat,lon,depth,ML,nstn,dmin,gap,trms,ERH,ERZ,fixed,nph,quality
-    # Combine date and time into a single datetime
-    df["time"] = pd.to_datetime(df["date"] + " " + df["time"])
-    df = df.rename(columns={
-        "lat": "lat",
-        "lon": "lon",
-        "depth": "depth",
-        "ML": "ml",
-        "gap": "gap",
-    })
-    # Ensure gap exists, otherwise set NaN
-    if "gap" not in df.columns:
-        df["gap"] = np.nan
-    else:
-        # Ensure numeric, coerce errors to NaN
-        df["gap"] = pd.to_numeric(df["gap"], errors='coerce')
+    # 欄位：date,time,lat,lon,depth,ML,nstn,dmin,gap,trms,ERH,ERZ,fixed,nph,quality
+    df["time"] = pd.to_datetime(df["date"] + " " + df["time"], errors="coerce")
+    df = df.rename(columns={"ML": "ml"})
+    df["gap"] = pd.to_numeric(df["gap"], errors="coerce") if "gap" in df.columns else np.nan
     df["source"] = "GDMS"
-    # Keep only needed columns
-    df = df[["time", "lat", "lon", "depth", "ml", "gap", "source"]]
-    return df
+    df["event_id"] = None
+    return df[["time", "lat", "lon", "depth", "ml", "gap", "source", "event_id"]]
+
+
+def dedup_within_source(df):
+    """來源內去重：時間取到分鐘、經緯度取到小數 4 位、規模取到 0.1 後完全相同者只留一筆。"""
+    key = pd.DataFrame({
+        "source": df["source"],
+        "t": df["time"].dt.round("1min"),
+        "lat": df["lat"].round(4),
+        "lon": df["lon"].round(4),
+        "ml": df["ml"].round(1),
+    })
+    return df[~key.duplicated(keep="first")]
+
+
+def dedup_cross_source(df):
+    """跨來源去重：CWA 事件若在 GDMS 中找得到同一事件，就移除 CWA 那筆。
+
+    兩個機構的定位結果不同（例如 921：23.853 vs 23.8525），不能用四捨五入後完全相等來比對，
+    改用時間與經緯度的容許差。
+    """
+    cwa = df[df["source"] == "CWA_XML"].sort_values("time").reset_index()
+    gdms = df[df["source"] == "GDMS"].sort_values("time")
+    if cwa.empty or gdms.empty:
+        return df, 0
+    g = gdms[["time", "lat", "lon"]].rename(columns={"lat": "lat_g", "lon": "lon_g"})
+    g["time_g"] = g["time"]
+    m = pd.merge_asof(cwa, g, on="time", direction="nearest",
+                      tolerance=pd.Timedelta(seconds=MATCH_SECONDS))
+    same = (
+        m["time_g"].notna()
+        & ((m["lat"] - m["lat_g"]).abs() <= MATCH_DEG)
+        & ((m["lon"] - m["lon_g"]).abs() <= MATCH_DEG)
+    )
+    return df.drop(index=m.loc[same, "index"]), int(same.sum())
+
+
+def gap_quality(g):
+    if pd.isna(g):
+        return "未知"
+    if g <= 90:
+        return "優"
+    return "可"
+
 
 def main():
     print("開始建構地震目錄...")
-    base_path = Path(".")
-    cwa_xml_dir = base_path / "E-A0073-002"
-    gdms_csv_dir = base_path / "earthquake_data" / "raw"
-    
-    xml_files = sorted(cwa_xml_dir.glob("CWA-EQ-Catalog-*.xml"))
-    gdms_files = sorted(gdms_csv_dir.glob("GDMS地震目錄_*.csv"))
-    
+    print(f"資料來源目錄：{DATA_DIR}")
+    xml_files = sorted((DATA_DIR / "E-A0073-002").glob("CWA-EQ-Catalog-*.xml"))
+    gdms_files = sorted((DATA_DIR / "earthquake_data" / "raw").glob("GDMS地震目錄_*.csv"))
+
     all_dfs = []
-    for xml_file in xml_files:
-        df_xml = parse_cwa_xml(xml_file)
-        all_dfs.append(df_xml)
-        print(f"已讀取 {xml_file.name}")
-    for csv_file in gdms_files:
-        df_csv = parse_gdms_csv(csv_file)
-        all_dfs.append(df_csv)
-        print(f"已讀取 {csv_file.name}")
-    
+    for f in xml_files:
+        all_dfs.append(parse_cwa_xml(f))
+        print(f"已讀取 {f.name}")
+    for f in gdms_files:
+        all_dfs.append(parse_gdms_csv(f))
+        print(f"已讀取 {f.name}")
     if not all_dfs:
-        print("錯誤：未讀取到任何資料檔案")
-        return
-    
-    df = pd.concat(all_dfs, ignore_index=True)
-    # Ensure time is datetime
-    df["time"] = pd.to_datetime(df["time"], errors='coerce')
-    # Mc = 2.0 completeness
-    df = df[df["ml"] >= 2.0]
-    # Gap filtering: keep if gap is NaN (missing) or <= 160
-    df = df[df["gap"].isna() | (df["gap"] <= 160)]
-    # Deduplication: round time to minute, lat/lon to 4 decimal, ml to 0.1
-    df["time_rounded"] = df["time"].dt.round("1min")
-    df["lat_rounded"] = df["lat"].round(4)
-    df["lon_rounded"] = df["lon"].round(4)
-    df["ml_rounded"] = df["ml"].round(1)
-    df = df.sort_values("ml_rounded", ascending=False).drop_duplicates(
-        subset=["time_rounded", "lat_rounded", "lon_rounded", "ml_rounded"],
-        keep="first"
-    )
-    
-    output_dir = base_path / "pipeline" / "data"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / "events.parquet"
-    df.to_parquet(output_path, index=False)
-    print(f"完成，共 {len(df)} 筆事件，輸出至 {output_path}")
-    print("來源分布:")
-    print(df["source"].value_counts())
-    print("Gap品質分布 (≤110 優, 110-160 可, NaN 未知):")
-    def gap_quality(g):
-        if pd.isna(g):
-            return "未知"
-        elif g <= 110:
-            return "優"
-        elif g <= 160:
-            return "可"
-        else:
-            return "剔除"
+        raise SystemExit("錯誤：未讀取到任何資料檔案，請確認 EQ_DATA_DIR")
+
+    df = pd.concat(all_dfs, ignore_index=True).dropna(subset=["time", "lat", "lon", "ml"])
+    print(f"原始筆數：{len(df)}")
+
+    df = df[df["ml"] >= MC]
+    print(f"ML >= {MC}：{len(df)}")
+
+    df = dedup_within_source(df)
+    print(f"來源內去重後：{len(df)}")
+
+    df, n_cross = dedup_cross_source(df)
+    print(f"跨來源去重：移除 {n_cross} 筆 CWA 重複事件，剩 {len(df)}")
+
+    df = df[df["gap"].isna() | (df["gap"] <= GAP_MAX)].copy()
+    print(f"Gap <= {GAP_MAX}（含未知）：{len(df)}")
+
     df["gap_quality"] = df["gap"].apply(gap_quality)
+    df = df.sort_values("time").reset_index(drop=True)
+
+    output_path = BASE_DIR / "pipeline" / "data" / "events.parquet"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(output_path, index=False)
+
+    print(f"完成，共 {len(df)} 筆事件，輸出至 {output_path}")
+    print("來源分布：")
+    print(df["source"].value_counts())
+    print("定位品質分布（優 <=90°、可 90–110°、未知 = 無 gap 欄位）：")
     print(df["gap_quality"].value_counts())
+    print("ML >= 5.5 事件數：", int((df["ml"] >= 5.5).sum()))
+
 
 if __name__ == "__main__":
     main()

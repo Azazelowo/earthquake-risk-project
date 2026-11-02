@@ -1,10 +1,11 @@
+%% Mermaid 沒有物件圖語法，以 classDiagram 模擬：物件名稱寫成「物件 : 類別」並帶入屬性值
 classDiagram
     class Car {
         +brand: string
         +color: string
     }
-    object myCar {
-        brand = "Toyota"
-        color = "Red"
+    class myCar["myCar : Car"] {
+        brand = Toyota
+        color = Red
     }
-
+    myCar ..> Car : 實例

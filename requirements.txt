@@ -1,0 +1,5 @@
+# Python 3.13 tested (2026-11-02). Python 3.15 alpha is NOT supported: numpy has no build for it yet.
+# pipeline/src/01_build_catalog.py, 02_clean_features.py
+pandas==3.1.0
+numpy==2.5.4
+pyarrow==26.0.0

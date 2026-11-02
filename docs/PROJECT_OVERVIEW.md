@@ -1,6 +1,6 @@
 # 專案概況：基於地球物理與多維觀測資料打造地震風險評估 APP
 
-> 彙整日期：2026-11-02
+> 彙整日期：2026-11-02（同日更新：加入範圍決定與第一輪修正結果，見第 8、9 節）
 > 彙整依據：期初提案 PDF、實務專題指導同意書、專案資料夾內所有文件與程式碼、系統分析與設計課程資料
 > 標記說明：**[事實]** 已從檔案直接確認；**[推測]** 由檔案內容推論，尚待驗證
 
@@ -115,8 +115,8 @@ flowchart LR
 
 | 檔案 | 狀態 | 問題 |
 |---|---|---|
-| [01_build_catalog.py](../pipeline/src/01_build_catalog.py) | 已產出 `events.parquet`（約 8 MB） | Gap 門檻寫 **160**，提案與甘特圖都是 **110** [事實]；CWA 與 GDMS 用「時間取到分鐘＋經緯度取到小數 4 位＋規模取到 0.1」去重，兩個機構的定位結果不同，**幾乎去不掉重複** [推測] |
-| [02_clean_features.py](../pipeline/src/02_clean_features.py) | 已產出 `features.parquet`（約 14 KB） | 只讀 CSV，不讀 RINEX；前兆資料夾為空時會進入 `np.random.rand()` 的假資料分支，且沒有設定亂數種子 [事實]。因此現有 `features.parquet` **高度可能是隨機假資料** [推測，尚未用 pandas 驗證] |
+| [01_build_catalog.py](../pipeline/src/01_build_catalog.py) | ✅ 已修正並重新產出 `events.parquet` | 原本 Gap 門檻寫 160、CWA 時間沒轉 UTC（差 8 小時）導致跨來源完全去不掉重複 [事實，已修正，見第 9 節] |
+| [02_clean_features.py](../pipeline/src/02_clean_features.py) | ⚠️ 程式已修正，**缺真實資料** | 原本的 `features.parquet` **確認是隨機假資料**（10 筆、單一網格、0–1 亂數）[事實]。現在沒有資料時會直接報錯；`--demo` 才產生固定種子的示範資料。只讀 CSV，RINEX 仍需先轉換 |
 | `03_train_backtest.py` | ❌ 不存在 | 甘特圖原排在 10/17–10/20 |
 | [scripts/*.ps1](../scripts) | ❌ 無法執行 | 見下表 |
 | [risk-assessment.yml](../.github/workflows/risk-assessment.yml) | ❌ 會失敗 | 資料沒進版控，第一步就會中止；`outputs\**` 在 Ubuntu runner 上是 Windows 路徑寫法 |
@@ -134,14 +134,22 @@ PowerShell 腳本的具體問題 [事實]：
 ### 3.4 方法上的疑點 [推測]
 
 - `02_clean_features.py` 用 `risk × (1 + 0.658 × risk / 100)` 把 k 當成放大係數，沒有物理或統計依據。
-- 提案寫的「布爾係數 k = 0.658」可能是指 **Weibull 形狀參數**（k < 1 代表時間上的群聚）。建議確認用詞與計算方式。
+- 程式註解寫「WBL k=0.658」，所以提案的「布爾係數」應該是 **Weibull 形狀參數 k** [推測]。
+- 用 `events.parquet` 的相鄰地震間隔擬合 Weibull，**重現不出 0.658** [事實]：
+
+  | 資料 | ML≥4 | ML≥5 | ML≥5.5 | ML≥6 |
+  |---|---|---|---|---|
+  | GDMS | 0.427 | 0.420 | 0.414 | 0.429 |
+  | CWA XML | 0.499 | 0.505 | 0.514 | 0.540 |
+
+- Weibull k 的意義 [理論]：**k = 1 是完全隨機（Poisson）**；**k < 1 代表群聚**，k 越小、群聚越明顯（大地震後短時間內接連發生很多地震，例如 921 的餘震序列）；k > 1 則代表接近週期性。所以「越接近 1 越像 921」是**反過來**的。
 - 用 min-max 正規化後加權平均，會讓單一極端值主導整個欄位。缺值補 0 則會被當成「低風險」，而不是「未知」。
 
 ### 3.5 版本控制 [事實]
 
-- 只有 1 個 commit：`2ac601d Initial commit: AGENTS.md and .gitignore`。
-- 其他檔案（包含所有程式、文件、資料）都**還沒追蹤**。
-- 有大型檔案：GDMS CSV 合計約 75 MB、XML、parquet、`node_modules/`。加入版控前要先調整 `.gitignore`，或改用 Git LFS。
+- `main` 只有 1 個 commit：`2ac601d Initial commit: AGENTS.md and .gitignore`，主資料夾的其他檔案都還沒追蹤。
+- 分支 `claude/project-overview-consolidation-4ec507` 已收錄程式、文件與課堂筆記（不含資料），`.gitignore` 排除原始資料、parquet、RINEX、Office 與 PDF。
+- 主資料夾的資料合計約 500 MB（`地震預測/` 170 MB、`earthquake_data/` 151 MB、`GDMS地震目錄/` 73 MB…），一律不進 git；程式改用環境變數 `EQ_DATA_DIR` 指向資料位置。
 
 ---
 
@@ -153,16 +161,20 @@ PowerShell 腳本的具體問題 [事實]：
 | 資料來源 | 寫「國防部地磁觀測站」「FORMOSAT-5/COSMIC TEC」，提案是 GDMS 與 CWA 太空天氣辦公室 | [資料字典](uml/09_data_dictionary.md)、[元件圖](uml/05_component_diagram.mmd) |
 | 機構錯誤 | 「WRA Geomagnetic」：WRA 是水利署，不負責地磁 | [use_case_diagram.mmd](../Chapter01/use_case_diagram.mmd) |
 | 驗收標準 | 「命中率 > 60%、漏報率 < 30%」沒有依據，提案中也沒有 | [需求規格表](uml/08_requirements_table.md) |
-| 驗證門檻 | 需求寫 M≥5.5，提案聚焦 M6+，甘特圖寫「4 大地震盲測」 | 多處 |
+| 驗證門檻 | 需求寫 M≥5.5，提案聚焦 M6+，甘特圖寫「4 大地震盲測」→ **已決定以 ML≥5.5 為準** | 多處 |
 | 技術選型 | 需求 NF1 指定 PowerShell，甘特圖規劃 Python + LightGBM + Streamlit | [需求規格說明](<../Chapter01/需求規格說明.md>)、`專題進度甘特圖.xlsx` |
-| Mermaid 語法 | ERD 的 `\|\|\|..\|{` 不合法，且全部是 1:1 關係 | [實體關係圖](<../Chapter08/實體關係圖.mmd>) |
-| Mermaid 語法 | `useCaseDiagram` 不是 Mermaid 支援的圖種 | [chapter6.md](../chapter6/chapter6.md) |
-| 用字 | 表頭用簡體字（过程编号、输入、输出） | [處理規範表](<../Chapter08/處理規範表.md>) |
-| 錯字 | 前騨（前驅）、特影（特徵）、貨獲（貢獻）、視覚化、触發 | [狀態機圖](uml/07_state_machine_diagram.mmd) |
-| 殘留字元 | 開頭與結尾殘留 `$@`、`@`、`$` | [README.md](../README.md)、[需求規格說明](<../Chapter01/需求規格說明.md>)、[use_case_diagram.mmd](../Chapter01/use_case_diagram.mmd) |
-| 重複與亂碼 | 兩份報告內容幾乎相同，且有 `arthquake_data`、`eport_figures` 等跳脫字元造成的缺字 | [final_report.md](../final_report.md)、[project_report.md](../project_report.md) |
+| ✅ Mermaid 語法 | ERD 的 `\|\|\|..\|{` 不合法（已修正）；全部是 1:1 關係（待重新設計） | [實體關係圖](<../Chapter08/實體關係圖.mmd>) |
+| ✅ Mermaid 語法 | `useCaseDiagram` 不是 Mermaid 支援的圖種（已改用 flowchart） | [chapter6.md](../coursework/chapter6/chapter6.md) |
+| ✅ Mermaid 語法 | 另有 10 張圖因標籤含括號、`note`、`componentDiagram` 等無法解析（已修正，54 張全數通過） | 多處 |
+| ✅ 用字 | 表頭用簡體字（过程编号、输入、输出） | [處理規範表](<../Chapter08/處理規範表.md>) |
+| ✅ 錯字 | 前騨（前驅）、特影（特徵）、貨獲（貢獻）、視覚化、触發；需求規格的「geez 震前」 | [狀態機圖](uml/07_state_machine_diagram.mmd) |
+| ✅ 殘留字元 | 35 個檔案開頭殘留 `$`、`$@`，README 結尾殘留 `@` | 多處 |
+| ✅ 年代錯誤 | 圖 3-2 的 OOP 語言順序把 Python 排在 Java 後、Kotlin 排在 Swift 後 | [圖3-2](<../coursework/ch03/圖3-2_物件導向程式發展歷史.mmd>) |
+| 重複與亂碼 | 兩份報告內容幾乎相同，且有 `arthquake_data`、`eport_figures` 等跳脫字元造成的缺字（已被本文件取代，未收進分支） | 主資料夾 `final_report.md`、`project_report.md` |
 
 ### 4.1 根目錄雜物 [事實]
+
+> 分支上已不含這些檔案；主資料夾裡仍然存在，等合併時再處理（見第 9.4 節）。
 
 | 類型 | 檔案 |
 |---|---|
@@ -301,12 +313,62 @@ flowchart TD
 
 ---
 
-## 8. 待確認事項
+## 8. 決策紀錄與待確認事項
+
+### 8.1 已決定（2026-11-02）
+
+| 問題 | 決定 | 影響 |
+|---|---|---|
+| 前兆資料範圍 | 只用**地震電磁學**相關資料：地磁、地電流、電離層 TEC（GNSS 只用來推算 TEC） | 文件中的 GPS 形變、地下水、氣壓、雨量、潮汐、應變全部移除；`02_clean_features.py` 已改成只讀地磁與 TEC |
+| 最終交付 | **手機 APP**，網頁版作為備用 | 分鏡板與 UI 設計以手機畫面為主 |
+| 驗證門檻 | **ML ≥ 5.5** | 去重後 443 筆；但 Gap≤110 會刪到 240 筆（見 9.2） |
+
+### 8.2 尚待確認
 
 | 問題 | 為什麼重要 |
 |---|---|
+| Gap≤110° 要用在「所有事件」還是「只用在特徵」？ | 目前會刪掉 46% 的 ML≥5.5 目標事件，且集中在東部外海 |
+| k = 0.658 的來源（哪個子集、哪種方法） | 現有資料重現不出來，口試可能被問 |
 | SA&D 小組專題是否沿用本題目？ | 決定第 5.2 節的作業缺口是否需要補 |
-| 「布爾係數 k = 0.658」的正式名稱與計算方式 | 口試時可能被問到；目前程式的使用方式沒有依據 |
-| 最終交付是手機 APP 還是 Web（Streamlit）？ | 提案寫 APP，甘特圖寫 Streamlit |
-| 驗證門檻是 M≥5.5 還是 M6+？ | 影響樣本數與統計檢定力 |
 | GDMS 地磁與 CWA TEC 資料的取得方式與授權 | 決定 B2 能否進行 |
+
+---
+
+## 9. 第一輪修正紀錄（2026-11-02）
+
+### 9.1 `features.parquet` 是假資料 [事實]
+
+10 筆、只有一個網格（22.0°N, 120.0°E）、2024-01-01 至 01-10，所有特徵都是 0–1 的亂數。原因是前兆資料夾全空，程式默默進入示範分支。現在沒有資料時會直接報錯。
+
+### 9.2 `events.parquet` 的時區錯誤 [事實]
+
+- CWA XML 的時間是台灣時間（`1999-09-21T01:47:16+08:00`），原程式直接切掉 `+08:00`；GDMS 是 UTC（`1999-09-20 17:47:15`）。
+- 兩邊差 8 小時，跨來源去重完全失效：**ML≥5.5 的 488 筆 CWA 事件中有 247 筆和 GDMS 重複**，921 被算兩次。
+- 修正後：先轉 UTC，再用「60 秒內、0.3° 內」判定同一事件，移除 72,222 筆 CWA 重複事件。
+
+| 階段 | 全部事件 | ML≥5.5 |
+|---|---|---|
+| 修正前 `events.parquet`（Gap≤160、有重複） | 274,169 | 740 |
+| 修正後、Gap 過濾前 | 403,934 | 443 |
+| 修正後、Gap≤110 | 124,776 | 240 |
+
+Gap≤110 刪掉的 203 筆 ML≥5.5 中，173 筆在 121.5°E 以東（東部外海，測站方位涵蓋不足）。921（Gap 78°）與 2024 花蓮地震（Gap 105°）都有保留。
+
+### 9.3 其他修正
+
+| 項目 | 內容 |
+|---|---|
+| `02_clean_features.py` | 前兆只留地磁與 TEC；`--demo` 才產生假資料，且固定亂數種子、輸出到另一個檔名並標記 `is_demo` |
+| 路徑 | 兩支程式都改用 `EQ_DATA_DIR` 讀資料，輸出到專案的 `pipeline/data/` |
+| `requirements.txt` | 新增；以 Python 3.13 實測（3.15 alpha 沒有對應的 numpy） |
+| `pipeline/README.md` | 新增執行說明與已知限制 |
+| 文件 | 見第 4 節打 ✅ 的項目 |
+| 課堂筆記 | 移到 `coursework/`；刪除重複的圖 3-12 與兩份重複的 `workflow.mmd` |
+
+### 9.4 主資料夾尚未處理
+
+這次的修改都在分支上。主資料夾的檔案還沒動，合併前需要：
+
+1. 把主資料夾中和分支同名的未追蹤檔案（例如 `pipeline/src/*.py`、`Chapter01/`）先移到 `_archive/`，否則 `git merge` 會拒絕覆蓋。
+2. 第 4.1 節的雜物也一起移到 `_archive/`（已在 `.gitignore` 中排除）。
+3. 舊的 `pipeline/data/events.parquet` 有重複事件，合併後要重新執行 `01_build_catalog.py`。

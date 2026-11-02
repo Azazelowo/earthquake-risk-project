@@ -2,7 +2,7 @@ erDiagram
     GEVENT ||..|| OBSERVATION : records
     GEVENT ||..|| RISK_RESULT : produces
     OBSERVATION ||..|| STATION : measured_at
-    STATION |||..|{ LOCATION : located
+    STATION }|..|| LOCATION : located_at
     RISK_RESULT }|..|| USER : viewed_by
     GEVENT {
         string id PK

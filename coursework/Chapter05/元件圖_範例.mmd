@@ -1,7 +1,4 @@
-componentDiagram
-    component 「瀏覽器」 as Browser
-    component 「網頁應用程式」 as WebApp
-    component 「資料庫」 as Database
-    Browser --> WebApp : HTTP
-    WebApp --> Database : SQL
-
+%% Mermaid 沒有元件圖語法，以 flowchart 模擬：方框代表元件，連線標示介面／協定
+flowchart LR
+    Browser["«component»<br/>瀏覽器"] -- HTTP --> WebApp["«component»<br/>網頁應用程式"]
+    WebApp -- SQL --> Database["«component»<br/>資料庫"]

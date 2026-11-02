@@ -1,29 +1,31 @@
-import pandas as pd
-import numpy as np
+import argparse
 import os
+import sys
 from glob import glob
+
+import numpy as np
+import pandas as pd
 
 # ========== Configuration ==========
 GRID_SIZE = 0.2  # degrees
 TIME_AGG = '1D'  # daily aggregation; can be '1H' for hourly
 BASE_DIR = os.path.join(os.path.dirname(__file__), '..', '..')
+DATA_DIR = os.environ.get('EQ_DATA_DIR', BASE_DIR)  # raw data may live outside git
+RANDOM_SEED = 42  # only used by --demo
+
+# 前兆範圍：只用地震電磁學相關資料（2026-11-02 決定）。
+# GNSS 在本專題是用來推算電離層 TEC，不是地殼形變；RINEX（.24o）要先轉成 CSV 才能讀取。
 PRECURSOR_FOLDERS = {
-    'geomagnetic': os.path.join(BASE_DIR, '地震預測', '地磁及地電流'),
-    'gps': os.path.join(BASE_DIR, '地震預測', '測地法'),
-    'tec': os.path.join(BASE_DIR, '地震預測', '電離層電子密度變化'),
-    'rainfall': os.path.join(BASE_DIR, '地震預測', '雨量'),  # placeholder if exists
-    'pressure': os.path.join(BASE_DIR, '地震預測', '氣壓'),   # placeholder
-    # add more as needed
+    'geomagnetic': os.path.join(DATA_DIR, '地震預測', '地磁及地電流'),
+    'tec': os.path.join(DATA_DIR, '地震預測', '電離層電子密度變化'),
 }
-# Placeholder weights (to be tuned later)
+# Placeholder weights: equal until calibrated by backtest
 WEIGHTS = {
-    'geomagnetic': 0.15,
-    'gps': 0.20,
-    'tec': 0.10,
-    'rainfall': 0.05,
-    'pressure': 0.05,
+    'geomagnetic': 0.5,
+    'tec': 0.5,
 }
-# Cascading weight factor (WBL k=0.658) placeholder
+# Placeholder: 0.658 could not be reproduced from events.parquet (Weibull k ≈ 0.41–0.54).
+# The multiplication in apply_weights() has no validated basis; review before use.
 CASCADE_K = 0.658
 
 def load_precursor(folder_path, var_name):
@@ -157,6 +159,12 @@ def apply_weights(df_features):
     return df_features
 
 def main():
+    parser = argparse.ArgumentParser(description="Clean precursor data into gridded daily features.")
+    parser.add_argument('--demo', action='store_true',
+                        help='when no precursor data exists, write seeded random demo data '
+                             'to features_DEMO.parquet instead of failing')
+    args = parser.parse_args()
+
     print("Loading precursor data...")
     feature_list = []
     for var_name, folder in PRECURSOR_FOLDERS.items():
@@ -172,9 +180,15 @@ def main():
         df_clean = denoise_iqr(df_stats)
         print(f"  After denoising: {df_clean.shape[0]} rows")
         feature_list.append((var_name, df_clean))
+    out_name = 'features.parquet'
     if not feature_list:
-        print("No precursor data loaded. Creating dummy output for demonstration.")
-        # Create a dummy DataFrame with a single grid cell and time range
+        # Previously this silently wrote random numbers to features.parquet,
+        # which looked like real output. Now it fails unless --demo is given.
+        if not args.demo:
+            sys.exit("ERROR: no precursor data found in PRECURSOR_FOLDERS. "
+                     "Add CSV files, or run with --demo for seeded fake data.")
+        print(f"No precursor data loaded. --demo: writing seeded random data (seed={RANDOM_SEED}).")
+        rng = np.random.default_rng(RANDOM_SEED)
         times = pd.date_range('2024-01-01', periods=10, freq='1D')
         lat_bin = 22.0  # example
         lon_bin = 120.0
@@ -182,13 +196,15 @@ def main():
         for t in times:
             row = {'lat_bin': lat_bin, 'lon_bin': lon_bin, 'time_bin': t}
             for var in PRECURSOR_FOLDERS.keys():
-                row[var] = np.random.rand()
-                row[f'{var}_rolling_mean'] = np.random.rand()
-                row[f'{var}_rolling_std'] = np.random.rand()
+                row[var] = rng.random()
+                row[f'{var}_rolling_mean'] = rng.random()
+                row[f'{var}_rolling_std'] = rng.random()
             dummy.append(row)
         df_features = pd.DataFrame(dummy)
+        df_features['is_demo'] = True
         print("Applying weights to dummy data...")
         df_features = apply_weights(df_features)
+        out_name = 'features_DEMO.parquet'
     else:
         print("Combining features...")
         df_features = combine_features([df for _, df in feature_list])
@@ -198,7 +214,7 @@ def main():
     # Ensure output directory
     out_dir = os.path.join(BASE_DIR, 'pipeline', 'data')
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, 'features.parquet')
+    out_path = os.path.join(out_dir, out_name)
     print(f"Saving to {out_path}...")
     df_features.to_parquet(out_path, index=False)
     print("Done.")

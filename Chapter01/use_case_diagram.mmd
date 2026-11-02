@@ -1,4 +1,3 @@
-$
 graph TD
     A[Researcher] -->|觸發| B[Import Earthquake Catalog]
     A -->|觸發| C[Calculate Baseline]
@@ -9,7 +8,7 @@ graph TD
     A -->|觸發| H[Automate via GitHub Actions]
     B -->|提供資料| I[CWA Earthquake Catalog]
     D -->|提供資料| J[NSRC GPS Deformation]
-    D -->|提供資料| K[WRA Geomagnetic]
+    D -->|提供資料| K[GDMS Geomagnetic]
     D -->|提供資料| L[Formosat-5 Ionosphere TEC]
     D -->|提供資料| M[CWA Atmospheric Pressure & Rainfall]
     D -->|提供資料| N[Ocean Research Institute Tidal & Water Loading]
@@ -22,7 +21,10 @@ graph TD
     H -->|觸發| E
     H -->|觸發| F
     H -->|觸發| G
-    style A fill:#f9f,stroke:#333
-    style I,J,K,L,M,N,O fill:#ccf,stroke:#333
-    style B,C,D,E,F,G,H fill:#cfc,stroke:#333
+    classDef actor fill:#f9f,stroke:#333
+    classDef source fill:#ccf,stroke:#333
+    classDef usecase fill:#cfc,stroke:#333
+    class A actor
+    class I,J,K,L,M,N,O source
+    class B,C,D,E,F,G,H usecase
 

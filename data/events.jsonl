@@ -38,3 +38,6 @@
 {"id": "us7000tuzd", "source": "usgs", "time_utc": "2026-11-02T19:59:04Z", "lat": 13.795, "lon": 146.6114, "depth_km": 10, "mag": 4.5, "mag_type": "mb", "url": "https://earthquake.usgs.gov/earthquakes/eventpage/us7000tuzd"}
 {"id": "cwa-20261103-2322", "source": "cwa", "time_utc": "2026-11-03T15:22:05Z", "lat": 24.44, "lon": 121.84, "depth_km": 15.2, "mag": 4.5, "mag_type": "ML", "url": "https://scweb.cwa.gov.tw/zh-tw/earthquake/details/2026076"}
 {"id": "cwa-20261103-1411", "source": "cwa", "time_utc": "2026-11-03T06:11:56Z", "lat": 23.19, "lon": 121.35, "depth_km": 15.3, "mag": 3.7, "mag_type": "ML", "url": "https://scweb.cwa.gov.tw/zh-tw/earthquake/details/2026110314115637"}
+{"id": "us7000tuxg", "source": "usgs", "time_utc": "2026-11-02T15:28:13Z", "lat": -10.1699, "lon": -78.5994, "depth_km": 67.239, "mag": 5.1, "mag_type": "mb", "url": "https://earthquake.usgs.gov/earthquakes/eventpage/us7000tuxg"}
+{"id": "us7000tuxi", "source": "usgs", "time_utc": "2026-11-02T15:35:12Z", "lat": 32.3376, "lon": 93.831, "depth_km": 10, "mag": 4.7, "mag_type": "mb", "url": "https://earthquake.usgs.gov/earthquakes/eventpage/us7000tuxi"}
+{"id": "us7000tuxy", "source": "usgs", "time_utc": "2026-11-02T16:49:17Z", "lat": 34.4807, "lon": 26.4694, "depth_km": 48.525, "mag": 5.3, "mag_type": "mb", "url": "https://earthquake.usgs.gov/earthquakes/eventpage/us7000tuxy"}

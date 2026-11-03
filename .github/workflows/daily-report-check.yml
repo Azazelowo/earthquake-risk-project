@@ -1,0 +1,55 @@
+# Checks that the scheduled Claude routine produced today's earthquake report.
+# The routine can silently fail to start (e.g. the execution environment is offline),
+# in which case nothing inside the routine can report the failure. This job runs
+# independently on GitHub and opens an issue, which emails the repo owner.
+name: daily-report-check
+
+on:
+  schedule:
+    - cron: "30 15 * * *"   # 23:30 Asia/Taipei, 90 minutes after the 22:00 routine
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Date to check (YYYY-MM-DD, Asia/Taipei). Empty = today."
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check today's report exists on daily-reports
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          INPUT_DATE: ${{ inputs.date }}
+        run: |
+          TODAY=${INPUT_DATE:-$(TZ=Asia/Taipei date +%F)}
+          REPORT="reports/${TODAY%%-*}/${TODAY}.md"
+
+          if gh api "repos/${REPO}/contents/${REPORT}?ref=daily-reports" --silent 2>/dev/null; then
+            echo "Found ${REPORT}"
+            exit 0
+          fi
+
+          TITLE="日報缺漏：${TODAY}"
+          OPEN=$(gh issue list --repo "$REPO" --state open --search "\"${TITLE}\" in:title" --json number --jq 'length')
+          if [ "$OPEN" != "0" ]; then
+            echo "Issue already open for ${TODAY}"
+            exit 0
+          fi
+
+          gh issue create --repo "$REPO" --title "$TITLE" --body "$(cat <<EOF
+          \`daily-reports\` 分支上找不到 \`${REPORT}\`（檢查時間：$(TZ=Asia/Taipei date '+%F %H:%M') Asia/Taipei）。
+
+          可能原因：
+          - 執行環境無法使用（例如電腦或 Claude 桌面版沒開）
+          - 排程執行中途失敗，或 push 失敗
+
+          請到 https://claude.ai/code/routines 查看這次的執行紀錄。下一次執行會自動補收漏掉期間的地震事件。
+          EOF
+          )"
+          echo "Opened issue: ${TITLE}"

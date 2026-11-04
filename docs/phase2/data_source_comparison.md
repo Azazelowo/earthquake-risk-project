@@ -208,3 +208,15 @@ python pipeline\src\fetch_usgs.py rebuild    # 不連網，用原始檔重建 Pa
 - **下游一定要排除 `status == "deleted"`**。已刪除的紀錄包含「併入主事件後撤銷」的重複版本，例如 921 的 ISC-GEM 紀錄 `iscgem1656082`（晚 14 秒、M6.3）。沒排除的話，921 會被算兩次。
 - 772 筆沒有 magType 的舊事件不能直接拿去和 CWA ML 比較，用之前要先決定怎麼處理（排除，或當成 mb）。
 - 這個分支沒有 `pipeline/README.md`（它在 B3 分支上）。合併後要在 README 的步驟表補一列 `fetch_usgs.py`，並讓 `01_build_catalog.py` 讀第 2 層的 `usgs.parquet`。
+
+### 環境與自動測試
+
+| 設定 | 說明 |
+|---|---|
+| `requirements.txt` | 與 B3 分支的檔案**逐位元相同**（同一個 git blob），兩邊合併不會衝突。本模組只用到其中的 pandas、pyarrow |
+| `.github/workflows/pipeline-tests.yml` | push 到 main 或開 PR 時，在 Python 3.13 跑 `pipeline/tests`（不連網、不需本機資料） |
+| `pipeline/.gitignore` | 排除 `pipeline/data/`，Parquet 與狀態檔不會被 commit |
+
+B3 分支的 `risk-assessment.yml` 也有跑同樣測試的 `tests` job，兩個分支都合併後要刪掉其中一個。
+
+`update` 尚未排程：原始資料放在本機 `EQ_DATA_DIR`，要在哪台機器、多久跑一次，還沒決定。

@@ -42,7 +42,7 @@ PR #2 的欄位已經在 `fetch_usgs.py` 實作，**名稱不改**。提案的�
 | `depth_uncertainty_km` | `depth_err_km` | 沿用 |
 | `catalog_version` | `fetched_at` | 沿用 |
 | （無） | **`depth_fixed`（新增）** | bool／NA。USGS 沒有明確欄位，**先填 NA**；不要用「深度 = 10／33／35 km」來推測（44% 的 USGS 事件是這些值，但這只是推測） |
-| （無） | **`source_event_aliases`（新增）** | str／NA。USGS `ids` 欄（同一事件的其他編號） |
+| （無） | **`source_event_aliases`（新增）** | str／NA。同一事件的其他編號。USGS 只在 GeoJSON 格式提供 `ids`，CSV 沒有，所以目前為 NA（見第 7 節） |
 | （無） | **`mag_type_norm`（新增）** | 標準化後的規模類型：`ML`、`mb`、`Ms`、`Mw`（`mww`、`mwr`、`mwc`、`mwb`、`mw` 都歸為 `Mw`） |
 
 第 2 層的鍵維持 PR #2 的 `(source, source_event_id)`，以 `source_updated` 新者為準。
@@ -113,12 +113,26 @@ PR #2 的欄位已經在 `fetch_usgs.py` 實作，**名稱不改**。提案的�
 
 只有 `pre-seismic` 才能拿來討論前兆，而且必須排除地磁擾動期（Kp／Dst）。各時段的時間窗等 TEC 資料到齊後再定。
 
-## 7. 待實作（這份規格不包含程式修改）
+## 7. 實作狀態（2026-11-05）
 
-| 項目 | 位置 | 說明 |
+| 項目 | 位置 | 狀態 |
 |---|---|---|
-| `01_build_catalog.py` 改用本規格 | B3 分支（PR #1） | 現行 60 秒／0.3° 方框改為 1 秒／1 km；改成產生 `event_matches`，不直接刪除紀錄 |
-| `fetch_usgs.py` 補新欄位 | PR #2 | `agency`、`source_event_aliases`、`mag_type_norm`、`depth_fixed`（NA） |
-| PR #2 文件第 2 層 `source` 列表補 `CWA_XML` | PR #2 | |
-| CWA × JMA 回測 | — | 等有 JMA 資料 |
-| GDMS `fixed` 欄（`F`／`X`）的意義 | — | 查證後才能填 `depth_fixed` |
+| `01_build_catalog.py`：CWA XML × GDMS 改為 1 秒／1 km 一對一配對，輸出 `catalog/event_matches.parquet`，`events.parquet` 加 `match_group_id` | PR #1（commit `ba93605`） | ✅ 完成，8 個單元測試 |
+| `fetch_usgs.py` 補 `agency`、`mag_type_norm`、`depth_fixed`、`source_event_aliases`；舊版 `usgs.parquet` 自動補欄位 | PR #2（commit `8408597`） | ✅ 完成，3 個單元測試＋實際連網升級測試 |
+| PR #2 文件第 2 層欄位表補 `CWA_XML` 與新欄位 | PR #2（commit `8408597`） | ✅ 完成 |
+| `source_event_aliases` 填值 | — | ⏸ USGS CSV 沒有 `ids` 欄位（只有 GeoJSON 有），目前一律 NA。要填值須把抓取格式改為 GeoJSON |
+| B3 報告（`docs/reports/b3_*`）用新目錄重新產生 | PR #1 | ⏸ 待決定。新目錄下目標事件數不變，指標變動 ≤0.01 |
+| CWA × JMA 回測 | — | ⏸ 等有 JMA 資料 |
+| GDMS `fixed` 欄（`F`／`X`）的意義 | — | ⏸ 查證後才能填 `depth_fixed` |
+
+### 7.1 換成新規則後，實際資料的變化（`01_build_catalog.py`，1990–2025）
+
+| 項目 | 舊版（60 秒／0.3° 方框，只看時間最近的一筆） | 新版 |
+|---|---|---|
+| 合併的 CWA XML 紀錄 | 72,222 | 72,246（high 72,238、medium 8） |
+| `events.parquet` 筆數 | 124,979 | 124,955 |
+| ML≥5.5 目標事件 | 443 | 443 |
+
+- **新版多合併的 42 筆**：全是 high（時間差 ≤0.49 秒、距離 ≤0.075 km），是舊版漏掉的重複。舊版只檢查時間最近的那筆 GDMS，如果最近的剛好是別的小地震，真正的配對就被漏掉。
+- **新版不再合併的 18 筆**：其中 15 筆時間差 11–59 秒或距離 12–36 km，規模也不同，是舊版誤合併的不同地震（10 筆在 2021-05 宜蘭外海序列）。
+- **已知限制**：另外 2–3 筆很可能是同一地震，但其中一個目錄的時間或位置被修訂過，新版不會配對：2019-09-21 02:24（0.7 秒、15.5 km）、2025-07-15 14:16（座標相同、時間差 28.7 秒），2025-12-05 00:00 無法判斷。都是 ML<4，不影響目標事件。

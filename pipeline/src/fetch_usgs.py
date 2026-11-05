@@ -29,6 +29,10 @@
     - 部分舊事件的 mag、magType 是空值（台灣框 1990–2009 有 772 筆沒有 magType，其中 427 筆也沒有 mag）。
     - 被刪除的事件包含「併入主事件後撤銷」的重複紀錄，例如 921 的 ISC-GEM 版本
       iscgem1656082。下游一定要排除 status == "deleted"，否則同一地震會被算兩次。
+    - CSV 格式沒有 ids（同一事件的其他編號）欄位，只有 GeoJSON 有；
+      所以 source_event_aliases 目前一律為 NA。
+
+欄位規格：docs/phase2/catalog_event_matching_spec.md（PR #4）第 3.1 節。
 """
 import argparse
 import datetime as dt
@@ -91,10 +95,19 @@ COLUMN_MAP = {
 FLOAT_COLS = ["lat", "lon", "depth", "mag", "gap", "horiz_err_km", "depth_err_km",
               "nst", "dmin_deg", "rms", "mag_error"]
 STR_COLS = ["mag_type", "source_event_id", "status", "event_type", "place", "net"]
-OUTPUT_COLUMNS = ["time", "lat", "lon", "depth", "mag", "mag_type", "gap",
-                  "horiz_err_km", "depth_err_km", "source", "source_event_id",
-                  "source_updated", "fetched_at", "status", "event_type", "place",
-                  "nst", "dmin_deg", "rms", "mag_error", "net"]
+OUTPUT_COLUMNS = ["time", "lat", "lon", "depth", "mag", "mag_type", "mag_type_norm", "gap",
+                  "horiz_err_km", "depth_err_km", "depth_fixed", "agency", "source",
+                  "source_event_id", "source_event_aliases", "source_updated", "fetched_at",
+                  "status", "event_type", "place", "nst", "dmin_deg", "rms", "mag_error", "net"]
+
+AGENCY = "USGS"   # ComCat 由 USGS 彙整；實際定位網路記在 net 欄
+
+# 規模類型標準化（規格 3.1 節）。USGS 的 magType 是小寫自由字串；
+# 沒列在這裡的（例如 "m"：未註明類型）一律為 NA，避免把不同尺度混在一起。
+MAG_TYPE_NORM = {
+    "ml": "ML", "mb": "mb", "mb_lg": "mb", "ms": "Ms", "ms_20": "Ms", "md": "Md",
+    "mw": "Mw", "mww": "Mw", "mwr": "Mw", "mwc": "Mw", "mwb": "Mw", "mwp": "Mw",
+}
 
 # 原始檔名：<抓取時間>_<模式>_<查詢起>_<查詢迄>.csv，rebuild 依抓取時間排序重放
 RAW_NAME_RE = re.compile(r"^(\d{8}T\d{6}Z)_")
@@ -193,6 +206,29 @@ def plan_chunks(start, end, count_fn, limit=SAFETY_LIMIT, min_span=dt.timedelta(
 
 
 # ---------------------------------------------------------------- 解析與合併
+def normalize_mag_type(s):
+    """USGS magType -> 規格的標準化類型（ML、mb、Ms、Md、Mw），無法判定時為 NA。"""
+    return s.astype("string").str.strip().str.lower().map(MAG_TYPE_NORM).astype("string")
+
+
+def ensure_columns(df):
+    """補上規格新增的欄位。
+
+    為什麼需要：PR #4 規格定案前寫出的 usgs.parquet 沒有這些欄位，
+    直接 upsert 會因為缺欄位而失敗。可以從既有欄位推得的就推得，其他填 NA。
+    """
+    df = df.copy()
+    if "agency" not in df.columns:
+        df["agency"] = AGENCY
+    if "mag_type_norm" not in df.columns:
+        df["mag_type_norm"] = normalize_mag_type(df["mag_type"])
+    if "depth_fixed" not in df.columns:
+        df["depth_fixed"] = pd.array([pd.NA] * len(df), dtype="boolean")
+    if "source_event_aliases" not in df.columns:
+        df["source_event_aliases"] = pd.array([pd.NA] * len(df), dtype="string")
+    return df[OUTPUT_COLUMNS]
+
+
 def parse_csv(text, fetched_at):
     """USGS CSV 文字 -> 統一欄位 DataFrame。時間一律為不帶時區的 UTC（與 events.parquet 一致）。"""
     raw = pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False)
@@ -207,6 +243,11 @@ def parse_csv(text, fetched_at):
     for c in ("time", "source_updated"):
         df[c] = pd.to_datetime(df[c], utc=True, format="ISO8601").dt.tz_localize(None)
     df["source"] = "USGS"
+    df["agency"] = AGENCY
+    df["mag_type_norm"] = normalize_mag_type(df["mag_type"])
+    # USGS CSV 沒有「深度固定」旗標；不用「深度 = 10／33 km」推測（規格 3.1 節）
+    df["depth_fixed"] = pd.array([pd.NA] * len(df), dtype="boolean")
+    df["source_event_aliases"] = pd.array([pd.NA] * len(df), dtype="string")
     df["fetched_at"] = pd.Timestamp(fetched_at).tz_convert("UTC").tz_localize(None)
     return df[OUTPUT_COLUMNS]
 
@@ -217,7 +258,7 @@ def upsert(existing, new):
     被刪除的事件（status = deleted）也照樣保留一列，下游用 status 過濾，
     這樣才看得出「這個事件曾經存在、後來被 USGS 撤銷」。
     """
-    frames = [f for f in (existing, new) if f is not None and len(f)]
+    frames = [ensure_columns(f) for f in (existing, new) if f is not None and len(f)]
     if not frames:
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
     df = pd.concat(frames, ignore_index=True)

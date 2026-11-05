@@ -132,10 +132,14 @@ flowchart LR
 | `time` | datetime（UTC，無時區） | 與 `events.parquet` 一致 |
 | `lat` `lon` `depth` | float | |
 | `mag` | float | |
-| `mag_type` | str | `ML`、`Mww`、`mb`… |
+| `mag_type` | str | `ML`、`Mww`、`mb`…（保留來源原字串） |
+| `mag_type_norm` | str／NA | 標準化：`ML`、`mb`、`Ms`、`Md`、`Mw`；無法判定為 NA |
 | `gap` | float／NaN | CWA API 一律 NaN |
 | `horiz_err_km` `depth_err_km` | float／NaN | GDMS 的 ERH／ERZ、USGS 的 horizontalError／depthError |
-| `source` | str | `GDMS`、`CWA_API`、`USGS` |
+| `agency` | str | 機構：`CWA`、`USGS`。GDMS 和 CWA XML 都是 `CWA` |
+| `source` | str | 目錄產品：`GDMS`、`CWA_XML`、`CWA_API`、`USGS` |
+| `depth_fixed` | bool／NA | 深度是否為固定值；來源沒有明確旗標時為 NA，不可推測 |
+| `source_event_aliases` | str／NA | 同一事件的其他編號。USGS CSV 沒有這個欄位，目前為 NA |
 | `source_event_id` | str | USGS `id`、CWA `EarthquakeNo`；GDMS 無 ID 時用時間＋座標組成 |
 | `source_updated` | datetime／NaT | USGS `updated` |
 | `fetched_at` | datetime（UTC） | 抓取時間，追溯用 |
@@ -143,7 +147,7 @@ flowchart LR
 
 USGS 另外保留 `event_type`、`place`、`nst`、`dmin_deg`、`rms`、`mag_error`、`net` 備查。
 
-跨機構比對的可信度欄位（`high`／`medium`）屬於第 3 層，等「地震目錄欄位擴充提案」定案再加。
+跨機構比對的結果（`match_group_id`、`confidence` 等）屬於第 3 層的 `event_matches`，規格已於 2026-11-05 定案，見 PR #4 的 `docs/phase2/catalog_event_matching_spec.md`。
 
 ## 5. 決策紀錄
 

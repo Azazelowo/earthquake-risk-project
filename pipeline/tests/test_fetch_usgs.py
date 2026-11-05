@@ -244,5 +244,43 @@ class TestEndToEnd(unittest.TestCase):
                 fu.run_update(args, Path(tmp), Path(tmp) / "raw", get=lambda u: "", sleep=lambda s: None)
 
 
+class TestSpecColumns(unittest.TestCase):
+    """PR #4 規格 3.1 節新增的欄位。"""
+
+    def test_new_fields(self):
+        text = "\n".join([HEADER, row("2026-11-03T15:22:04.984Z", "us1", "2026-11-03T20:05:55.175Z")])
+        df = fu.parse_csv(text, utc(2026, 11, 4))
+        self.assertEqual(df.loc[0, "agency"], "USGS")
+        self.assertEqual(df.loc[0, "mag_type_norm"], "mb")
+        # CSV 沒有固定深度旗標與 ids，不可推測補值
+        self.assertTrue(pd.isna(df.loc[0, "depth_fixed"]))
+        self.assertTrue(pd.isna(df.loc[0, "source_event_aliases"]))
+
+    def test_mag_type_norm(self):
+        s = pd.Series(["mww", "Mwr", "mb", "ml", "ms_20", "m", None, " mwc "])
+        got = fu.normalize_mag_type(s).tolist()
+        self.assertEqual(got[:6], ["Mw", "Mw", "mb", "ML", "Ms", pd.NA])
+        self.assertTrue(pd.isna(got[6]))
+        self.assertEqual(got[7], "Mw")
+
+    def test_upsert_with_old_schema_parquet(self):
+        """規格定案前寫出的 usgs.parquet 沒有新欄位，合併時要自動補上而不是失敗。"""
+        old = fu.parse_csv("\n".join([HEADER, row("2020-01-01T00:00:00Z", "us_old", "2020-01-02T00:00:00Z")]),
+                           utc(2020, 1, 3))
+        old = old.drop(columns=["agency", "mag_type_norm", "depth_fixed", "source_event_aliases"])
+        new = fu.parse_csv("\n".join([HEADER, row("2026-01-01T00:00:00Z", "us_new", "2026-01-02T00:00:00Z")]),
+                           utc(2026, 1, 3))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "usgs.parquet"
+            fu.write_parquet(old, path)
+            merged = fu.upsert(fu.load_parquet(path), new)
+            fu.write_parquet(merged, path)
+            back = fu.load_parquet(path)
+        self.assertEqual(list(back.columns), fu.OUTPUT_COLUMNS)
+        self.assertEqual(back["agency"].tolist(), ["USGS", "USGS"])
+        self.assertEqual(back["mag_type_norm"].tolist(), ["mb", "mb"])
+        self.assertTrue(back["depth_fixed"].isna().all())
+
+
 if __name__ == "__main__":
     unittest.main()

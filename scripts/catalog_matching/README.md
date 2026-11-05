@@ -1,6 +1,6 @@
-# CWA × USGS 跨機構事件比對回測
+# 跨機構事件比對回測（CWA × USGS、CWA XML × GDMS）
 
-> 執行日期：2026-11-04　｜　程式：[backtest_cwa_usgs.py](backtest_cwa_usgs.py)　｜　結果表：[results/](results/)
+> 執行日期：2026-11-04（USGS）、2026-11-05（GDMS）　｜　程式：[backtest_cwa_usgs.py](backtest_cwa_usgs.py)、[backtest_cwa_gdms.py](backtest_cwa_gdms.py)　｜　結果表：[results/](results/)　｜　規格：[catalog_event_matching_spec.md](../../docs/phase2/catalog_event_matching_spec.md)
 > 目的：驗證「地震目錄欄位擴充提案」中的比對門檻（10 秒／30 km／深度差 30 km）是否合理。
 
 ## 為什麼要回測
@@ -73,7 +73,7 @@
 | 現行 60 秒／0.3° 方框 | 4,717 | 258（5.5%） |
 | 建議 10 秒／75 km | 5,084 | 89（1.7%） |
 
-⚠ 現行規則是用在 **CWA XML × GDMS**（同一機構的兩種產品），這次回測的是 CWA × USGS，兩者不能直接比較。CWA × GDMS 應該另外回測，門檻可能可以更緊。
+⚠ 現行規則是用在 **CWA XML × GDMS**（同一機構的兩種產品），和這裡的 CWA × USGS 不能直接比較。CWA XML × GDMS 的回測見結果 8。
 
 ### 6. 漏配主因是 CWA XML 的涵蓋範圍，不是比對規則 [事實]
 
@@ -108,6 +108,28 @@ CWA ML 減 USGS mb 的差值：
 
 → 2026-11-01 那筆（深度 119 km，ML 5.6 對 mb 4.8，差 0.8）落在深源事件的正常範圍內：深度 100 km 以上、mb 4.5–5.1 的事件中，有 12% 差值 ≥0.8。這支持提案「不能把差值當誤差」的論點，也顯示**規模換算必須考慮深度**。差值為何隨深度變大，這裡沒有驗證 [推測：可能和 ML 的距離衰減校正對深源事件不適用有關]。
 
+### 8. CWA XML × GDMS：其實是同一份資料 [事實]
+
+範圍：CWA XML 公告的範圍（北緯 20–27°、東經 118–124°，1990–2025），CWA XML 73,704 筆、GDMS（ML≥2.5）186,206 筆。
+
+| 指標 | 結果 |
+|---|---|
+| \|dt\| | 中位數 0.25 秒、**最大 0.5 秒**（剛好是 XML 四捨五入到整秒的誤差） |
+| 距離 | 中位數 0.04 km、99.9% 在 0.08 km 內（座標取到小數三位） |
+| ML 差 | 100% 在 ±0.05 內 |
+| 例外 | 25 筆 \|dt\|>2 秒或距離 >5 km，可能是事後重新定位 [推測] |
+
+| 規則 | 配對數 | 巧合上限 |
+|---|---|---|
+| 現行 60 秒／0.3° | 72,252 | 3,987 |
+| **1 秒／1 km** | **72,237** | **4** |
+| 2 秒／5 km | 72,241 | 63 |
+
+- 現行規則實際多配的只有約 15 筆。巧合上限高估了，因為幾乎每筆都有真正的夥伴先被選走。不過既然兩者是同一份資料的不同精度，1 秒／1 km 就足夠，也比較安全。
+- 沒配到的 1,447 筆中，**1,442 筆在本機 GDMS 檔的範圍外**。本機 GDMS 只涵蓋北緯 21–25°、東經 119–124.85°，其中 1,392 筆在北緯 25° 以北。範圍內只剩 5 筆，4 筆剛好落在 25.000° 邊界上。
+- → 北緯 25° 以北目前只有 CWA XML（ML≥3）可用；如果需要那一區的小地震，GDMS 要重新下載更大的範圍。
+- → 這也證實 `source`（目錄產品）和 `agency`（機構）必須分開：GDMS 和 CWA XML 都是 CWA。
+
 ## 建議修改提案
 
 | 項目 | 提案 | 建議 | 依據 |
@@ -126,7 +148,8 @@ CWA ML 減 USGS mb 的差值：
 - 平移法得到的是誤配**上限**。
 - 「USGS 深度為 10／33／35 km 就是固定深度」是推測，USGS CSV 沒有明確欄位。
 - 123°E 以西有 261 筆 USGS 事件在 CWA XML 中找不到（見結果 6），漏配率 5.9% 主要反映目錄缺漏，不是規則問題。
-- 只回測了 CWA × USGS。CWA × GDMS、CWA × JMA 都需要另外回測。
+- CWA × JMA 沒有回測（本機沒有 JMA 資料）。
+- GDMS 的 `fixed` 欄（`F`／`X`）意義沒有查證，規格先不使用。
 
 ## 如何重跑
 
@@ -135,5 +158,7 @@ CWA ML 減 USGS mb 的差值：
 ```bash
 python -I scripts/catalog_matching/backtest_cwa_usgs.py --data-dir <含 earthquake_data/ 與 E-A0073-002/ 的資料夾> --out <輸出資料夾>
 ```
+
+GDMS 版改執行 `backtest_cwa_gdms.py`，參數相同，需在 `scripts/catalog_matching/` 目錄內執行或把它加進 `PYTHONPATH`（它會 import `backtest_cwa_usgs`）。
 
 輸出：`grid.csv`（門檻網格）、`named_rules.csv`（提案與現行規則）、`pairs_wide_60s_100km.csv`（配對明細）、`null_pairs_wide.csv`（平移後的巧合配對）、`usgs_unmatched_wide.csv`（沒配到的 USGS 事件）。

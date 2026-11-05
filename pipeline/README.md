@@ -58,7 +58,7 @@ python -m unittest discover -s pipeline\tests -v   # 單元測試（合成資料
 | 步驟 | 輸入（`EQ_DATA_DIR` 底下） | 輸出（`pipeline/data/`） | 說明 |
 |---|---|---|---|
 | `00_download_space_weather.py` | 網路：GFZ Kp、NASA OMNI2 | `space_weather_hourly.parquet`、`space_weather_daily.parquet`；原始檔在 `地震預測/太空天氣指數/raw/` | Kp、ap、Ap、Dst、AE、F10.7、SN、IMF Bz；每日磁暴旗標。是**控制變數**，不是前兆 |
-| `01_build_catalog.py` | `E-A0073-002/*.xml`、`earthquake_data/raw/GDMS地震目錄_*.csv` | `events.parquet` | 統一轉成 UTC、Mc=2.0、來源內與跨來源去重、標記特徵事件與目標事件（見下表） |
+| `01_build_catalog.py` | `E-A0073-002/*.xml`、`earthquake_data/raw/GDMS地震目錄_*.csv` | `events.parquet`、`catalog/event_matches.parquet` | 統一轉成 UTC、Mc=2.0、來源內去重、CWA XML × GDMS 跨來源比對（見下方說明）、標記特徵事件與目標事件（見下表） |
 | `02_clean_features.py` | `地震預測/地磁及地電流/*.csv`、`地震預測/電離層電子密度變化/*.csv` | `features.parquet` | 0.2° 網格 × 日。**B2，資料到齊後改寫** |
 | `03_train_backtest.py` | `events.parquet`、設定檔 `pipeline/configs/*.json` | `b3_<tag>/`（預測、目標、特徵、`metrics.json`） | **B3 基準模型**：去群聚、目標定義、時間切分、POD／FAR／CSI。報告在 `docs/reports/b3_<tag>/` |
 | `case_ndh5_tec.py` | `地震預測/測地法/GNSS_ETEC/*.24o`；下載廣播星曆與 DCB 到 `地震預測/測地法/aux/` | `tec/ndh5_vtec_15min.parquet`（與 `.csv`） | 2024 花蓮地震的單一個案展示。報告在 `docs/reports/case_ndh5_2024hualien/` |
@@ -67,12 +67,25 @@ python -m unittest discover -s pipeline\tests -v   # 單元測試（合成資料
 
 | 欄位 | 條件 | 用途 | 筆數 |
 |---|---|---|---|
-| `use_for_features` | Gap ≤ 110° 或 Gap 未知 | 計算地震活動特徵（震頻、b 值等） | 124,776 |
+| `use_for_features` | Gap ≤ 110° 或 Gap 未知 | 計算地震活動特徵（震頻、b 值等） | 124,752 |
 | `is_target` | ML ≥ 5.5，**不論 Gap** | 回測的目標事件 | 443 |
 
 **為什麼目標事件不看 Gap**：外海地震的測站只在陸地一側，Gap 本來就偏大。若用 Gap≤110 刪除目標事件，
 443 筆會只剩 240 筆，被刪掉的 203 筆中有 173 筆在東部外海（例如 2004 年 ML 7.1，Gap 243°），
 模型會系統性地看不到外海大地震。Gap 過大但規模不到 5.5 的事件，兩種用途都用不到，所以不輸出。
+
+### 跨來源比對（`event_matches.parquet`）
+
+規格見 PR #4 的 `docs/phase2/catalog_event_matching_spec.md`。CWA XML 是 GDMS 四捨五入到整秒、座標取到小數三位的版本，所以：
+
+| 等級 | 條件 | 2026-11-05 實測 |
+|---|---|---|
+| `high` | \|dt\| ≤ 1 秒 且 距離 ≤ 1 km | 72,238 組 |
+| `medium`（需人工確認） | 其餘 \|dt\| ≤ 2 秒 且 距離 ≤ 10 km | 8 組 |
+
+- 一對一配對；`events.parquet` 每組只留 GDMS 那筆（high 和 medium 都合併），並多一欄 `match_group_id`。
+- `event_matches.parquet` 每筆原始紀錄一列（476,156 列），記錄群組、可信度、`pair_with`、`dt_s`、`dist_km`、`ddepth_km`、`matcher_version`。
+- 和舊版（60 秒／0.3° 方框，只檢查時間最近的一筆）相比：**多合併 42 筆舊版漏掉的重複**（全是 high），**不再合併 15 筆其實是不同地震的紀錄**（時間差 11–59 秒或距離 12–36 km），但會**漏掉 2–3 筆時間或位置被修訂過的重複**（2019-09-21 02:24、2025-07-15 14:16，可能還有 2025-12-05 00:00；都是 ML<4）。ML≥5.5 目標事件數不變（443）。
 
 ## B3 框架（`src/eqforecast/`）
 

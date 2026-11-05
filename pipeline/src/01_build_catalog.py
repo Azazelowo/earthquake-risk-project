@@ -1,11 +1,16 @@
-"""01_build_catalog.py：整併 CWA XML 與 GDMS CSV 地震目錄，輸出 events.parquet。
+"""01_build_catalog.py：整併 CWA XML 與 GDMS CSV 地震目錄，輸出 events.parquet 與 event_matches.parquet。
 
 處理順序：
 1. 讀取 CWA XML（台灣時間 +08:00）與 GDMS CSV（UTC），統一轉成 UTC。
 2. 完備規模篩選：ML >= MC。
 3. 來源內去重：時間取到分鐘＋經緯度取到小數 4 位＋規模取到 0.1。
-4. 跨來源去重：CWA 與 GDMS 在 MATCH_SECONDS 秒、MATCH_DEG 度內視為同一事件，保留 GDMS
-   （GDMS 有方位角空隙 gap 等定位品質欄位）。
+4. 跨來源比對（規格：docs/phase2/catalog_event_matching_spec.md，PR #4）：
+   CWA XML 是 GDMS 四捨五入到整秒、座標取到小數三位的版本（回測：|dt| 最大 0.5 秒、
+   距離最大 0.08 km），所以用一對一配對，|dt| <= 1 秒且距離 <= 1 km 為 high，
+   其餘 |dt| <= 2 秒且距離 <= 10 km 為 medium（需人工確認）。
+   配對結果寫進 event_matches.parquet（每筆原始紀錄一列）；events.parquet 每個群組只留一筆，
+   保留 GDMS（GDMS 有方位角空隙 gap 等定位品質欄位）。medium 也合併，因為重複計數的傷害
+   比誤合併少數幾筆大。舊版的 60 秒／0.3° 方框，巧合配對上限約 4,000 筆。
 5. 定位品質標記：gap <= GAP_MAX（或 gap 未知）的事件標記 use_for_features = True，
    只有這些事件可以拿來計算地震活動特徵。
 6. 目標事件：ML >= TARGET_ML 的事件標記 is_target = True，不論 gap 都保留。
@@ -30,8 +35,11 @@ import pandas as pd
 MC = 2.0             # 完備規模
 GAP_MAX = 110        # 方位角空隙上限（度），只用於特徵事件
 TARGET_ML = 5.5      # 回測目標事件的規模門檻
-MATCH_SECONDS = 60   # 跨來源視為同一事件的時間容許差（秒）
-MATCH_DEG = 0.3      # 跨來源視為同一事件的經緯度容許差（度）
+# 跨來源比對門檻（CWA XML × GDMS，依 2026-11-05 回測；見規格 4.1 節）
+MATCH_HIGH_S, MATCH_HIGH_KM = 1.0, 1.0
+MATCH_MEDIUM_S, MATCH_MEDIUM_KM = 2.0, 10.0
+MATCHER_VERSION = "v1:cwa_xml_gdms=1s/1km(high),2s/10km(medium)"
+EARTH_RADIUS_KM = 6371.0
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.environ.get("EQ_DATA_DIR", BASE_DIR))
@@ -93,26 +101,108 @@ def dedup_within_source(df):
     return df[~key.duplicated(keep="first")]
 
 
-def dedup_cross_source(df):
-    """跨來源去重：CWA 事件若在 GDMS 中找得到同一事件，就移除 CWA 那筆。
+def haversine_km(lat1, lon1, lat2, lon2):
+    lat1, lon1, lat2, lon2 = map(np.radians, (lat1, lon1, lat2, lon2))
+    a = (np.sin((lat2 - lat1) / 2) ** 2
+         + np.cos(lat1) * np.cos(lat2) * np.sin((lon2 - lon1) / 2) ** 2)
+    return 2 * EARTH_RADIUS_KM * np.arcsin(np.sqrt(a))
 
-    兩個機構的定位結果不同（例如 921：23.853 vs 23.8525），不能用四捨五入後完全相等來比對，
-    改用時間與經緯度的容許差。
+
+def epoch_s(t):
+    # 與單位無關：pandas 3 的 datetime 可能是 [s]、[ms]、[us]，不能用 astype(int64) 再除固定常數
+    return ((t - pd.Timestamp("1970-01-01")) / pd.Timedelta(seconds=1)).to_numpy()
+
+
+def assign_event_ids(df):
+    """GDMS 與 CWA XML 都沒有穩定事件編號，用「時間（0.01 秒）＋座標」組成（規格 3.1 節）。"""
+    base = (df["time"].dt.strftime("%Y%m%dT%H%M%S") + "."
+            + (df["time"].dt.microsecond // 10000).astype(str).str.zfill(2) + "_"
+            + df["lat"].map("{:.4f}".format) + "_" + df["lon"].map("{:.4f}".format))
+    # 理論上來源內去重後不會重複；保險起見，重複時加序號
+    dup = base.groupby([df["source"], base]).cumcount()
+    return base.where(dup == 0, base + "_" + dup.astype(str))
+
+
+def match_cross_source(query, ref):
+    """一對一配對 query（CWA XML）與 ref（GDMS），回傳配對表。
+
+    回傳欄位：qi、ri（輸入 DataFrame 的位置）、dt_s（ref − query）、dist_km、ddepth_km、confidence。
+    深度與規模不參與判定（規格 4.3 節）。
     """
-    cwa = df[df["source"] == "CWA_XML"].sort_values("time").reset_index()
-    gdms = df[df["source"] == "GDMS"].sort_values("time")
-    if cwa.empty or gdms.empty:
-        return df, 0
-    g = gdms[["time", "lat", "lon"]].rename(columns={"lat": "lat_g", "lon": "lon_g"})
-    g["time_g"] = g["time"]
-    m = pd.merge_asof(cwa, g, on="time", direction="nearest",
-                      tolerance=pd.Timedelta(seconds=MATCH_SECONDS))
-    same = (
-        m["time_g"].notna()
-        & ((m["lat"] - m["lat_g"]).abs() <= MATCH_DEG)
-        & ((m["lon"] - m["lon_g"]).abs() <= MATCH_DEG)
-    )
-    return df.drop(index=m.loc[same, "index"]), int(same.sum())
+    qt, rt = epoch_s(query["time"]), epoch_s(ref["time"])
+    order = np.argsort(rt, kind="stable")
+    rt_sorted = rt[order]
+    lo = np.searchsorted(rt_sorted, qt - MATCH_MEDIUM_S, "left")
+    hi = np.searchsorted(rt_sorted, qt + MATCH_MEDIUM_S, "right")
+    qi = np.repeat(np.arange(len(query)), hi - lo)
+    if len(qi) == 0:
+        return pd.DataFrame(columns=["qi", "ri", "dt_s", "dist_km", "ddepth_km", "confidence"])
+    ri = order[np.concatenate([np.arange(a, b) for a, b in zip(lo, hi)])]
+    p = pd.DataFrame({
+        "qi": qi, "ri": ri, "dt_s": rt[ri] - qt[qi],
+        "dist_km": haversine_km(query["lat"].to_numpy()[qi], query["lon"].to_numpy()[qi],
+                                ref["lat"].to_numpy()[ri], ref["lon"].to_numpy()[ri]),
+        "ddepth_km": np.abs(ref["depth"].to_numpy(dtype=float)[ri] - query["depth"].to_numpy(dtype=float)[qi]),
+    })
+    p = p[p["dist_km"] <= MATCH_MEDIUM_KM]
+    # 依標準化分數由小到大，兩邊都還沒配到才配（規格 4.2 節）
+    p = p.assign(score=p["dt_s"].abs() / MATCH_MEDIUM_S + p["dist_km"] / MATCH_MEDIUM_KM) \
+         .sort_values(["score", "qi", "ri"], kind="stable")
+    used_q, used_r, keep = set(), set(), []
+    for idx, a, b in zip(p.index, p["qi"], p["ri"]):
+        if a in used_q or b in used_r:
+            continue
+        used_q.add(a)
+        used_r.add(b)
+        keep.append(idx)
+    p = p.loc[keep].drop(columns="score").reset_index(drop=True)
+    high = (p["dt_s"].abs() <= MATCH_HIGH_S) & (p["dist_km"] <= MATCH_HIGH_KM)
+    p["confidence"] = np.where(high, "high", "medium")
+    return p
+
+
+def build_event_matches(df, matched_at):
+    """跨來源比對，回傳 (events, event_matches)。
+
+    events：每個比對群組一列（優先保留 GDMS），多一欄 match_group_id。
+    event_matches：每筆原始紀錄一列（規格 3.2 節），沒配到的也有一列、confidence 為空。
+    """
+    df = df.sort_values("time", kind="stable").reset_index(drop=True)
+    df["source_event_id"] = assign_event_ids(df)
+    cwa = df[df["source"] == "CWA_XML"]
+    gdms = df[df["source"] == "GDMS"]
+    pairs = match_cross_source(cwa.reset_index(drop=True), gdms.reset_index(drop=True))
+    q_idx = cwa.index.to_numpy()[pairs["qi"].to_numpy(dtype=int)]
+    r_idx = gdms.index.to_numpy()[pairs["ri"].to_numpy(dtype=int)]
+
+    # 群組：配對成功的兩筆同一群，其餘各自一群；群組 ID 用群內最早時間
+    group_of = np.arange(len(df))
+    group_of[q_idx] = r_idx
+    first_time = df.groupby(group_of)["time"].transform("min")
+    stamp = first_time.dt.strftime("EMG_%Y%m%d%H%M%S")
+    seq = pd.Series(group_of).groupby(stamp).transform(lambda s: pd.factorize(s)[0])
+    df["match_group_id"] = stamp + "_" + seq.astype(str).str.zfill(2)
+
+    rec = pd.DataFrame({
+        "match_group_id": df["match_group_id"],
+        "source": df["source"],
+        "source_event_id": df["source_event_id"],
+        "confidence": pd.array([pd.NA] * len(df), dtype="string"),
+        "pair_with": pd.array([pd.NA] * len(df), dtype="string"),
+        "dt_s": np.nan, "dist_km": np.nan, "ddepth_km": np.nan,
+    })
+    for mine, other, sign in ((q_idx, r_idx, 1.0), (r_idx, q_idx, -1.0)):
+        rec.loc[mine, "confidence"] = pairs["confidence"].to_numpy()
+        rec.loc[mine, "pair_with"] = (df.loc[other, "source"] + ":" + df.loc[other, "source_event_id"]).to_numpy()
+        rec.loc[mine, "dt_s"] = sign * pairs["dt_s"].to_numpy()   # 對方 − 本筆
+        rec.loc[mine, "dist_km"] = pairs["dist_km"].to_numpy()
+        rec.loc[mine, "ddepth_km"] = pairs["ddepth_km"].to_numpy()
+    rec["matcher_version"] = MATCHER_VERSION
+    rec["matched_at"] = pd.Timestamp(matched_at)
+
+    # 每群只留一筆：配對成功時刪掉 CWA XML 那筆
+    events = df.drop(index=q_idx).drop(columns="source_event_id")
+    return events, rec, pairs
 
 
 def gap_quality(g):
@@ -150,8 +240,11 @@ def main():
     df = dedup_within_source(df)
     print(f"來源內去重後：{len(df)}")
 
-    df, n_cross = dedup_cross_source(df)
-    print(f"跨來源去重：移除 {n_cross} 筆 CWA 重複事件，剩 {len(df)}")
+    matched_at = pd.Timestamp.now(tz="UTC").tz_localize(None).floor("s")
+    df, matches, pairs = build_event_matches(df, matched_at)
+    n_conf = pairs["confidence"].value_counts()
+    print(f"跨來源比對：{len(pairs)} 組 CWA XML × GDMS（high {int(n_conf.get('high', 0))}、"
+          f"medium {int(n_conf.get('medium', 0))}），合併後剩 {len(df)}")
 
     df["use_for_features"] = df["gap"].isna() | (df["gap"] <= GAP_MAX)
     df["is_target"] = df["ml"] >= TARGET_ML
@@ -168,8 +261,13 @@ def main():
     output_path = BASE_DIR / "pipeline" / "data" / "events.parquet"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(output_path, index=False)
+    # event_matches 涵蓋所有原始紀錄（含被 gap 規則排除的），比對結果才完整可查
+    matches_path = BASE_DIR / "pipeline" / "data" / "catalog" / "event_matches.parquet"
+    matches_path.parent.mkdir(parents=True, exist_ok=True)
+    matches.to_parquet(matches_path, index=False)
 
     print(f"完成，共 {len(df)} 筆事件，輸出至 {output_path}")
+    print(f"比對紀錄 {len(matches)} 筆，輸出至 {matches_path}")
     print("來源分布：")
     print(df["source"].value_counts())
     print(f"定位品質分布（優 <=90°、可 90–{GAP_MAX}°、差 >{GAP_MAX}°、未知 = 無 gap 欄位）：")

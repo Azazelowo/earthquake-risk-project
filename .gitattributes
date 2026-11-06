@@ -1,0 +1,26 @@
+# Line endings. Without this file, core.autocrlf=true on Windows checks out
+# CRLF, and a shell script run directly from the working copy fails on "\r".
+# Only file types that need a fixed ending are pinned; everything else keeps
+# Git's default text handling.
+* text=auto
+
+*.sh   text eol=lf
+*.py   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+# Windows-only scripts keep CRLF (cmd.exe can misparse LF-only batch files).
+*.ps1  text eol=crlf
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+
+# Binary: never convert or diff as text.
+*.png     binary
+*.jpg     binary
+*.pdf     binary
+*.pptx    binary
+*.docx    binary
+*.xlsx    binary
+*.parquet binary
+*.gz      binary
+*.zip     binary

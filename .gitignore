@@ -93,3 +93,6 @@ venv/
 *.docx
 *.xlsx
 ~$*
+
+# Phase 2 第 1 層原始資料（USGS 原始 CSV 等），僅存在本機，不進版控
+earthquake_data/

@@ -1,0 +1,3 @@
+rule,max_dt,max_dist,matched,matched_rate,exp_false,exp_false_rate,unmatched,box_deg
+proposal_10s_30km,10,30.0,4536,0.7619687552494541,61.6,0.013580246913580247,1417,
+current_60s_0.3deg,60,,4717,0.7923735931463128,258.5,0.05480178079287683,1236,0.3

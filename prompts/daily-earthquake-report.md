@@ -9,36 +9,38 @@
 ## 0. 執行前提（每次都要先做）
 
 1. 這是**無人值守**的執行：不要提問、不要等待確認，遇到問題就記錄在報告的「執行日誌」並繼續。
-2. 取得目前時間，以 **Asia/Taipei（UTC+8）** 為準，定義：
-   - `TODAY` = 今日日期（YYYY-MM-DD）
-   - 檢索窗口 = 過去 24 小時；學術與民間來源可放寬到過去 7 天
-3. **切換到報告分支**（報告與回測資料只存在 `daily-reports` 分支，`main` 只放程式與提示）：
+2. **準備報告分支並計算檢索窗口**：直接執行下面的腳本，**不可自行改寫這些步驟**（以前讓代理自己寫指令時，曾經跳過清理步驟，也曾經誤判有沒有漏跑）：
    ```bash
-   git fetch origin
-   # 清掉前次執行殘留、仍佔用 daily-reports 的 worktree（否則下一行會失敗）
-   git worktree prune
-   OLD=$(git worktree list --porcelain | awk '/^worktree /{p=$2} /^branch refs\/heads\/daily-reports$/{print p}')
-   [ -n "$OLD" ] && git worktree remove --force "$OLD"
-   WT="$(mktemp -d)/wt"   # 暫存目錄，不動使用者的工作目錄
-   if git ls-remote --exit-code --heads origin daily-reports >/dev/null; then
-     git worktree add -B daily-reports "$WT" origin/daily-reports
-   else
-     git worktree add -b daily-reports "$WT" origin/main
-   fi
-   cd "$WT"
+   git fetch -q origin
+   git show origin/main:scripts/prepare_report_branch.sh | bash
    ```
-   之後所有讀寫都在 `$WT` 內進行，`data/` 以這個分支的內容為準（上一次執行累積的回測資料在這裡）。
+   腳本會建立 `daily-reports` 的 worktree、刪除報告分支上的 `prompts/`，並把下列變數寫入 `${TMPDIR:-/tmp}/daily_report_env.sh`。**之後每個 Bash 指令開頭都要先** `source "${TMPDIR:-/tmp}/daily_report_env.sh"`，因為每次 Bash 呼叫都是新的 shell，變數不會保留：
+   - `WT`：worktree 路徑，之後所有讀寫都在這裡進行
+   - `TODAY`：報告日期（Asia/Taipei）
+   - `WINDOW_START_UTC`、`WINDOW_END_UTC`：**地震檢索窗口（USGS、CWA）一律使用這兩個值**，不可自行計算
+   - `CATCHUP`：`yes` 代表前次窗口結束超過 24 小時（中間有漏跑），窗口已自動往前延伸，最多 7 天
+   
+   學術與民間來源的檢索範圍仍是過去 7 天。
+
+   `CATCHUP=yes` 時：報告開頭寫明「補收期間：<WINDOW_START>～<前 24 小時起點>，原因：前次排程未執行」，並在 1.1 節的表格加一欄，標示哪些事件屬於補收。補收期間有哪些事件、共幾筆，必須用程式從 `data/events.jsonl` 依 `time_utc` 篩選（`WINDOW_START_UTC` ≤ t < 前 24 小時起點）後填入，**不可只憑本次 API 查詢結果描述**（曾經發生資料庫已補進 3 筆，報告卻寫「補收期間無事件」）。漏掉的日子**不另外產生**當天的報告檔。
+3. 腳本失敗時，在執行日誌記錄錯誤訊息後結束，**不要自行改用其他方式切換分支**；若連報告分支都無法建立，依排程指示寫 `reports/ERROR-<日期>.md`。
 4. 專案根目錄下的資料位置（不存在就建立）：
    - `reports/YYYY/TODAY.md` — 今日報告
    - `data/predictions.jsonl` — 民間預測與前兆紀錄（回測資料庫，**只追加或更新狀態，不刪除**）
    - `data/events.jsonl` — 已收錄的真實地震事件
    - `data/backtest.csv` — 比對結果彙總
-5. 若 `reports/YYYY/TODAY.md` 已存在（同日重跑），覆寫報告，但 `data/` 內的紀錄要以 `id` 去重，不可重複寫入。
+   - `data/coverage.json` — 地震檢索已涵蓋到的時間點：`{"last_window_end_utc": "...", "report": "TODAY"}`，由第 6 節更新，腳本靠它判斷有沒有漏跑
+5. 若 `reports/YYYY/TODAY.md` 已存在（同日重跑）：
+   - **從頭重新產生整份報告**，不可讀取舊報告再局部修改（局部修改會留下前一版過期的敘述）
+   - 只能從 `data/` 和本次抓到的資料取得內容；開頭註明「本檔覆寫同日稍早的版本」
+   - `data/` 內的紀錄以 `id` 去重，不可重複寫入
 6. 語言：繁體中文（台灣用語），專有名詞可保留英文。
 7. **執行環境可能是 Windows（Git Bash）**，系統預設編碼為 cp950：
    - 每個 Bash 指令開頭先 `export PYTHONIOENCODING=utf-8`
    - Python 讀寫檔案一律寫明 `open(path, encoding="utf-8")`，JSONL 寫入時用 `json.dumps(obj, ensure_ascii=False)`
    - 不要在使用者的工作目錄直接切換分支；用 `git worktree add` 在暫存目錄操作 `daily-reports`，完成後 `git worktree remove`
+8. **數值一律由程式計算**：報告中所有從 `data/` 推導出的數字，包括事件數、群組數、合併窗口的起訖日、最近結算日、命中統計、`base_rate_p`，都必須用 Python 讀取 `data/` 計算後，直接把輸出填進報告，**不可憑記憶或從前一版報告抄寫**。報告寫完後，再用程式重新計算一次，和報告中的數字比對；不一致就修正報告，並在執行日誌記錄。
+9. **寫檔方式（安全規則）**：報告和所有檔案一律用 **Write 工具**寫入。**不可**用 Bash 的 `cat <<EOF`、`echo` 或 `printf` 寫報告：沒有加引號的 heredoc 會把反引號裡的文字當成指令執行，也會展開 `$變數`。這曾經讓報告中用反引號標示的檔名全部消失；如果展開的是 `$CWA_API_KEY`，授權碼就會外洩到公開的 repo。不得已要在 Bash 寫檔時，必須使用加引號的 `<<'EOF'`。
 
 ---
 
@@ -267,15 +269,30 @@ curl -s -m 30 -H "Authorization: $CWA_API_KEY" \
 - [ ] 抓取失敗的來源已寫入執行日誌，而非被省略
 - [ ] 覆蓋率：1.2 的三個主題都至少搜尋 2 次、arXiv 清單已讀；2.1 的 feed 已嘗試；2.2 的四項因子都有對應小節
 - [ ] 若 quakeforecast feed 有過去 7 天的文章，`predictions.jsonl` 卻沒有新增，要說明原因（例如文章不含可量化預測）
+- [ ] 報告中由 `data/` 推導的數字（窗口起訖、結算日、群組數、命中統計）已用程式重算比對，和資料一致（第 0 節第 8 點）
+- [ ] 若有漏掉的日子，報告開頭已寫明補收期間，補收的事件也已標示（第 0 節第 2 點）
+- [ ] 報告是整份重新產生，沒有殘留前一版的敘述
 
 ## 6. 完成後
 
-1. 只在 `daily-reports` 分支 commit 並 push，**不可動 `main`**、不可 force push：
+1. 更新 `data/coverage.json`，把 `last_window_end_utc` 設為 `$WINDOW_END_UTC`、`report` 設為 `$TODAY`。
+2. **commit 前的安全檢查**（任何一項失敗都不可 commit，改在摘要中說明）：
    ```bash
-   git add reports/ data/
-   git commit -m "daily report: TODAY"
+   source "${TMPDIR:-/tmp}/daily_report_env.sh"; cd "$WT"
+   git add -A reports/ data/
+   # 授權碼外洩檢查：只回傳是否命中，不印出授權碼本身
+   if [ -n "${CWA_API_KEY:-}" ] && git diff --cached | grep -qF "$CWA_API_KEY"; then echo "KEY LEAK"; exit 1; fi
+   # 報告完整性檢查：反引號片段被當成指令吃掉時，會留下多餘空白
+   git show origin/main:scripts/check_report.py > /tmp/check_report.py
+   python3 -I /tmp/check_report.py "reports/${TODAY%%-*}/$TODAY.md" || echo "CHECK REPORT TEXT"
+   ```
+   出現 `CHECK REPORT TEXT` 時，用 Write 工具重寫報告後再檢查一次。
+3. 只在 `daily-reports` 分支 commit 並 push，**不可動 `main`**、不可 force push：
+   ```bash
+   source "${TMPDIR:-/tmp}/daily_report_env.sh"; cd "$WT"
+   git commit -m "daily report: $TODAY"
    git push origin daily-reports
    ```
    push 失敗（例如遠端有新 commit）時，先 `git pull --rebase origin daily-reports` 再重試一次；仍失敗就在摘要中說明。
-   push 成功後移除 worktree：`cd` 回原目錄，執行 `git worktree remove "$WT"`。
-2. 在對話最後輸出 5 行以內的摘要：今日顯著地震數、新增預測數、結算結果、報告檔案路徑、push 是否成功。
+   push 成功後移除 worktree：`source` 環境檔、`cd` 回原目錄後，執行 `git worktree remove "$WT"`。
+4. 在對話最後輸出 5 行以內的摘要：今日顯著地震數、新增預測數、結算結果、報告檔案路徑、push 是否成功。

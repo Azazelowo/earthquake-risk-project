@@ -13,7 +13,12 @@
 | 誤配（巧合） | 把 USGS 時間整體平移 ±10 分、±30 分、±1、±2、±3 小時（共 10 組）後重跑，取平均 | 平移後還能配到的一定是巧合。保留地震叢集（餘震序列），比均勻隨機更貼近實際 |
 | 漏配 | 沒配到的 USGS 事件比例，**只算東經 123° 以西**（理由見下） | CWA XML 涵蓋 ML≥3，USGS 收錄的 M4 級事件理論上都應該在 |
 
-**資料**：USGS ComCat CSV（`earthquake_data/raw/`）與 CWA XML 目錄（`E-A0073-002/`，1990–2025）。範圍取兩者重疊區：北緯 21–25°、東經 119–124°、1990-01-01 至 2025-12-31 UTC。共 USGS 5,953 筆、CWA 72,252 筆。
+**資料**：USGS ComCat CSV（`earthquake_data/raw/地震紀錄_usgs_earthquake_1990_2026.csv`）與 CWA XML 目錄（`E-A0073-002/`，1990–2025）。
+
+- USGS 檔案是**手動下載**的單一 CSV，**不是** `pipeline/src/fetch_usgs.py` 的輸出（後者寫入 `earthquake_data/raw/usgs_fdsn/`）。要重現結果必須用同一份檔案。
+- 腳本會排除 `status == deleted` 的事件；目前這份檔案只有 `reviewed` 與 `automatic`，排除前後結果相同。
+
+範圍取兩者重疊區：北緯 21–25°、東經 119–124°、1990-01-01 至 2025-12-31 UTC。共 USGS 5,953 筆、CWA 72,252 筆。
 
 **健全性檢查**：921 集集地震配對到，dt = −2.5 秒、距離 19 km、CWA ML 7.3 對 USGS Mw 7.7。
 

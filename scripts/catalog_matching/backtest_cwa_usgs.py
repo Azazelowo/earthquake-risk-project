@@ -45,6 +45,10 @@ DIST_GRID = [10, 20, 30, 50, 75, 100]
 def load_usgs(data_dir: Path) -> pd.DataFrame:
     f = data_dir / "earthquake_data" / "raw" / "地震紀錄_usgs_earthquake_1990_2026.csv"
     u = pd.read_csv(f)
+    # Deleted events (merged into a primary event, then retracted) would be counted twice.
+    # Same rule as pipeline/src/fetch_usgs.py (see its module docstring).
+    if "status" in u.columns:
+        u = u[u["status"].fillna("") != "deleted"].reset_index(drop=True)
     out = pd.DataFrame({
         "uid": u["id"],
         "t": pd.to_datetime(u["time"], utc=True),

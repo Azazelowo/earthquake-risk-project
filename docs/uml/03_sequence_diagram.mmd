@@ -1,0 +1,68 @@
+sequenceDiagram
+    autonumber
+    actor Researcher as 研究員
+    actor Scheduler as 排程器
+    participant Import as Import-EarthquakeCatalog
+    participant Baseline as Compute-Baseline
+    participant Ingest as Ingest-Precursors
+    participant Scoring as Risk-Scoring
+    participant Visualize as Visualize-Results
+    participant Validator as HistoricalValidator
+    participant Storage as 檔案系統 / GitHub Artifacts
+    
+    Note over Researcher, Storage: 手動執行或排程觸發
+    
+    Scheduler->>Import: 啟動管道
+    Researcher->>Import: 手動執行
+    
+    Import->>Storage: 讀取 CWA_catalog.csv
+    Storage-->>Import: 地震目錄資料
+    Import->>Import: 驗證欄位 (時間、經緯度、ML、深度)
+    Import->>Import: 型別檢查與範圍驗證
+    Import-->>Researcher: 輸出前 5 筆供檢閱
+    
+    Import->>Baseline: 傳遞目錄路徑
+    Baseline->>Storage: 讀取目錄
+    Baseline->>Baseline: 解析時間、篩選最近 30 天
+    Baseline->>Baseline: 計算平均 ML、深度、日均震頻
+    Baseline->>Storage: 儲存 baseline.json
+    Baseline-->>Researcher: 輸出基線結果
+    
+    Baseline->>Ingest: 觸發前驅整合
+    Ingest->>Storage: 讀取 precursor_data/ 7 類檔案
+    Storage-->>Ingest: GPS、地磁、地下水、TEC、氣壓、雨量、潮汐
+    Ingest->>Ingest: 統一時間戳 (ObservationTime)
+    Ingest->>Ingest: 加入來源標記
+    Ingest->>Storage: 輸出 precursors_combined.csv
+    Ingest-->>Researcher: 輸出合併筆數與範例
+    
+    Ingest->>Scoring: 傳遞特徵路徑
+    Scoring->>Storage: 讀取 features_normalized.csv
+    Scoring->>Storage: 讀取 baseline.json
+    Scoring->>Scoring: Weighted Sum 計算 (Σ normalized × weight × 100)
+    Scoring->>Scoring: 計算相對基線增加百分比
+    Scoring->>Scoring: 找出前 3 大貢獻來源
+    Scoring->>Scoring: 產生「基於 X、Y、Z 觀測，區域風險上升 N%」摘要
+    Scoring->>Storage: 儲存 risk_scores.csv
+    Scoring-->>Researcher: 輸出最近 5 筆摘要
+    
+    Scoring->>Visualize: 傳遞風險分數路徑
+    Visualize->>Storage: 讀取 risk_scores.csv
+    Visualize->>Visualize: Python matplotlib/seaborn 繪圖
+    Visualize->>Visualize: 時間序列圖、熱力圖、地圖熱圖
+    Visualize->>Storage: 儲存 PNG/HTML 圖表
+    Visualize-->>Researcher: 視覺化完成通知
+    
+    Scoring->>Validator: 觸發歷史驗證
+    Validator->>Storage: 讀取歷史 M>=5.5 地震
+    Validator->>Storage: 讀取 risk_scores.csv
+    Validator->>Validator: 計算命中率、漏報率、誤報率
+    Validator->>Validator: 1/3/7 天前分數檢查
+    Validator->>Storage: 儲存 validation_report.json
+    Validator-->>Researcher: 驗證報告
+    
+    Validator->>Scoring: 回饋權重調整建議
+    Scoring->>Storage: 更新 WeightConfig
+    
+    Storage->>GitHub: 上傳 artifacts
+    GitHub-->>Researcher: 工作流程完成

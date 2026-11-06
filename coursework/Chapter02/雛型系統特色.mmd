@@ -1,0 +1,12 @@
+flowchart TD
+    A[需求澄清] --> B[快速建立原型]
+    B --> C[客戶評估與回饋]
+    C --> D{需求是否穩定?}
+    D -->|否| B
+    D -->|是| E[最終系統開發]
+    E --> F[部署與維護]
+    style A fill:#f9f,stroke:#333
+    style F fill:#ccf,stroke:#333
+    classDef characteristic fill:#dfd,stroke:#332;
+    class A,B,C,D,E,F characteristic;
+

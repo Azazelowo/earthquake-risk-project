@@ -1,0 +1,26 @@
+{
+  "_comment": "B3 基準模型設定。欄位說明見 pipeline/src/eqforecast/config.py。改了任何數字都要重跑 03_train_backtest.py。",
+  "tag": "baseline",
+  "region": {"lat_min": 21.0, "lat_max": 26.0, "lon_min": 119.0, "lon_max": 123.0},
+  "cell_deg": 0.2,
+  "horizon_days": 30,
+  "issue_start": "1991-01-01",
+  "target_ml": 5.5,
+  "target_max_depth_km": null,
+  "decluster_method": "gardner_knopoff",
+  "decluster_fs_time_prop": 0.1,
+  "decluster_min_ml": 3.0,
+  "feature_min_ml": 3.0,
+  "splits": {
+    "train": ["1991-01-01", "2013-01-01"],
+    "val": ["2013-01-01", "2018-01-01"],
+    "test": ["2018-01-01", null]
+  },
+  "embargo_days": 0,
+  "taus": [0.01, 0.02, 0.05, 0.10],
+  "models": ["random", "ri", "logistic"],
+  "logistic_C_grid": [0.01, 0.1, 1.0],
+  "n_bootstrap": 2000,
+  "seed": 42,
+  "external_features": []
+}

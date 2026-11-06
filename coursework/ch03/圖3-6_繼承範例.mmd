@@ -1,0 +1,18 @@
+classDiagram
+    class PrecursorRecord {
+        -observationTime: String
+        -value: Double
+        -source: String
+        +normalize(): Double
+    }
+    class GPSRecord {
+        -latitude: Double
+        -longitude: Double
+        +normalize(): Double
+    }
+    class MAGRecord {
+        -sensorID: String
+        +normalize(): Double
+    }
+    PrecursorRecord <|-- GPSRecord
+    PrecursorRecord <|-- MAGRecord

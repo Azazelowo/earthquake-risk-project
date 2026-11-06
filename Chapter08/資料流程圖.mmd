@@ -1,0 +1,21 @@
+flowchart TD
+    %% External Entities
+    E1[氣象局] --> P1[收集地震資料]
+    E2[使用者] --> P4[產出報告]
+    E3[政府單位] --> P4
+    %% Processes
+    P1 --> D1[(暫存資料)]
+    D1 --> P2[前處理]
+    P2 --> D2[(清洗資料)]
+    D2 --> P3[風險計算]
+    P3 --> D3[(風險結果)]
+    D3 --> P4
+    %% Data stores
+    style D1 fill:#fff,stroke:#111
+    style D2 fill:#fff,stroke:#111
+    style D3 fill:#fff,stroke:#111
+    style P1 fill:#cfc,stroke:#333
+    style P2 fill:#cfc,stroke:#333
+    style P3 fill:#cfc,stroke:#333
+    style P4 fill:#cfc,stroke:#333
+

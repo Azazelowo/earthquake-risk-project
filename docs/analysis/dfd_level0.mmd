@@ -1,0 +1,39 @@
+graph TD
+    %% External Entities
+    CWA[(CWA 地震目錄)] -->|Earthquake CSV| A[Import Earthquake Catalog]
+    GPS[(GPS 變形)] -->|GPS Data| B[Ingest Precursors]
+    MAG[(地磁)] -->|MAG Data| B
+    GW[(地下水)] -->|GW Data| B
+    TEC[(離電層 TEC)] -->|TEC Data| B
+    PRESS[(氣壓)] -->|PRESS Data| B
+    RAIN[(雨量)] -->|RAIN Data| B
+    TIDAL[(潮汐/水載荷)] -->|TIDAL Data| B
+    STRAIN[(地殼應變/應力)] -->|STRAIN Data| B
+    %% Data Stores
+    A -->|Catalog Data| D1[(Earthquake Catalog Store)]
+    B -->|Precursor Data| D2[(Precursor Store)]
+    D1 -->|Catalog Data| C[Compute Baseline]
+    D2 -->|Precursor Data| F[Normalize Features]
+    C -->|Baseline Values| D3[(Baseline Store)]
+    D3 -->|Baseline| E[Compute Risk Score]
+    F -->|Normalized Features| E
+    E -->|Risk Score| G[Generate Risk Summary]
+    E -->|Risk Score| H[Generate Visualizations]
+    G -->|Summary Text| I[(Output Store)]
+    H -->|Visualisation Files| I
+    I -->|Outputs| Researcher[(Researcher)]
+    %% Automation Trigger
+    GitHubActions[(GitHub Actions)] -->|Schedule Trigger| A
+    GitHubActions -->|Schedule Trigger| C
+    GitHubActions -->|Schedule Trigger| B
+    GitHubActions -->|Schedule Trigger| F
+    GitHubActions -->|Schedule Trigger| E
+    GitHubActions -->|Schedule Trigger| G
+    GitHubActions -->|Schedule Trigger| H
+    classDef external fill:#f9f,stroke:#333;
+    classDef process fill:#cfc,stroke:#333;
+    classDef store fill:#dfd,stroke:#333;
+    class CWA,GPS,MAG,GW,TEC,PRESS,RAIN,TIDAL,STRAIN,Researcher,GitHubActions external;
+    class A,B,C,E,F,G,H process;
+    class D1,D2,D3,I store;
+

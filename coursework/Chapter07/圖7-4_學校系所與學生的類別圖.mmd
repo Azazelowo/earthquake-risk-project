@@ -1,0 +1,39 @@
+classDiagram
+    class School {
+        -name: string
+        -address: string
+        -establishedYear: int
+        +getDetails(): string
+    }
+    class Department {
+        -name: string
+        -code: string
+        -head: Professor
+        +offerCourse(): void
+        +manageBudget(): void
+    }
+    class Student {
+        -id: string
+        -name: string
+        -enrollmentDate: date
+        -major: Department
+        +registerForCourse(c: Course): void
+    }
+    class Professor {
+        -employeeId: string
+        -name: string
+        -title: string
+        +teachCourse(c: Course): void
+    }
+    class Course {
+        -code: string
+        -name: string
+        -credits: int
+    }
+    School "1" *-- "many" Department : contains >
+    School "1" *-- "many" Student : enrolls >
+    Department "1" *-- "many" Professor : employs >
+    Department "1" *-- "many" Course : offers >
+    Student "1" --> "1" Department : majors in >
+    Student "1" *-- "many" Course : enrolls >
+    Professor "1" *-- "many" Course : teaches >

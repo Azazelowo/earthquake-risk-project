@@ -1,0 +1,40 @@
+flowchart TD
+    Start([開始]) --> Import[/匯入地震目錄 CSV/]
+    Import --> ValidateCatalog{欄位驗證\n通過?}
+    ValidateCatalog -- 否 --> LogError1[記錄錯誤並結束]
+    ValidateCatalog -- 是 --> Baseline[/計算 30 天基線/]
+    Baseline --> SaveBaseline[/儲存 baseline.json/]
+    SaveBaseline --> Ingest[/整合 7 類前驅資料/]
+    Ingest --> CheckPrecursors{前驅資料\n至少一類存在?}
+    CheckPrecursors -- 否 --> LogError2[記錄警告並結束]
+    CheckPrecursors -- 是 --> NormalizeTime[/統一時間戳格式/]
+    NormalizeTime --> AddSource[/加入來源標記/]
+    AddSource --> SavePrecursors[/儲存 precursors_combined.csv/]
+    SavePrecursors --> FeatureEng[/特徵工程：正規化/]
+    FeatureEng --> SaveFeatures[/儲存 features_normalized.csv/]
+    SaveFeatures --> Scoring[/風險評分計算/]
+    Scoring --> LoadWeights[/載入權重配置/]
+    LoadWeights --> CalcScore[/Weighted Sum 計算/]
+    CalcScore --> CalcIncrease[/計算相對基線增加%/]
+    CalcIncrease --> FindTop3[/找出前 3 大貢獻/]
+    FindTop3 --> GenSummary[/產生風險摘要/]
+    GenSummary --> SaveScores[/儲存 risk_scores.csv/]
+    SaveScores --> Visualize[/視覺化輸出/]
+    Visualize --> GenTS[/生成時間序列圖/]
+    GenTS --> GenHM[/生成熱力圖/]
+    GenHM --> GenMap[/生成地圖熱圖/]
+    GenMap --> SaveCharts[/儲存圖表檔案/]
+    SaveCharts --> Validate[/歷史驗證/]
+    Validate --> LoadHistory[/載入 M>=5.5 歷史地震/]
+    LoadHistory --> CalcMetrics[/計算命中率/漏報率/誤報率/]
+    CalcMetrics --> CheckThresholds{指標達標?}
+    CheckThresholds -- 否 --> AdjustWeights[/調整權重/]
+    AdjustWeights --> LoadWeights
+    CheckThresholds -- 是 --> End([結束])
+    
+    style Start fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
+    style End fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
+    style LogError1 fill:#ffcdd2,stroke:#c62828,stroke-width:2px
+    style LogError2 fill:#ffcdd2,stroke:#c62828,stroke-width:2px
+    style Validate fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    style AdjustWeights fill:#fff3e0,stroke:#e65100,stroke-width:2px

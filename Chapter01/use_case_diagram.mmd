@@ -1,0 +1,30 @@
+graph TD
+    A[Researcher] -->|觸發| B[Import Earthquake Catalog]
+    A -->|觸發| C[Calculate Baseline]
+    A -->|觸發| D[Ingest Precursors]
+    A -->|觸發| E[Compute Risk Score]
+    A -->|觸發| F[Generate Visualizations]
+    A -->|觸發| G[Output Risk Summary]
+    A -->|觸發| H[Automate via GitHub Actions]
+    B -->|提供資料| I[CWA Earthquake Catalog]
+    D -->|提供資料| J[NSRC GPS Deformation]
+    D -->|提供資料| K[GDMS Geomagnetic]
+    D -->|提供資料| L[Formosat-5 Ionosphere TEC]
+    D -->|提供資料| M[CWA Atmospheric Pressure & Rainfall]
+    D -->|提供資料| N[Ocean Research Institute Tidal & Water Loading]
+    D -->|提供資料| O[Institute of Geosciences Crustal Strain/Stress]
+    E -->|使用| F
+    E -->|生成| G
+    H -->|觸發| B
+    H -->|觸發| C
+    H -->|觸發| D
+    H -->|觸發| E
+    H -->|觸發| F
+    H -->|觸發| G
+    classDef actor fill:#f9f,stroke:#333
+    classDef source fill:#ccf,stroke:#333
+    classDef usecase fill:#cfc,stroke:#333
+    class A actor
+    class I,J,K,L,M,N,O source
+    class B,C,D,E,F,G,H usecase
+

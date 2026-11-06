@@ -68,5 +68,31 @@ target/
 *.tmp
 *.temp
 
+# ===== 專案資料（體積大、可重新下載，只放本機） =====
+E-A0073-002/
+GDMSdata/
+GDMS地震目錄/
+earthquake_data/raw/
+earthquake_data/processed/
+測地法/
+地震預測/
+pipeline/data/
+*.parquet
+*.24o
+
+# ===== 本機暫存與封存 =====
+_archive/
+outputs/
+.venv/
+venv/
+
+# ===== Office 與 PDF =====
+# 提案、同意書含個人資料；文獻 PDF 有著作權，不放進 git
+*.pdf
+*.pptx
+*.docx
+*.xlsx
+~$*
+
 # Phase 2 第 1 層原始資料（USGS 原始 CSV 等），僅存在本機，不進版控
 earthquake_data/

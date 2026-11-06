@@ -1,0 +1,21 @@
+classDiagram
+    class School {
+        -name: string
+        -address: string
+        +enrollStudent(s: Student)
+        +addDepartment(d: Department)
+    }
+    class Department {
+        -name: string
+        -code: string
+        +offerCourse()
+    }
+    class Student {
+        -id: string
+        -name: string
+        -major: Department
+        +register()
+    }
+    School "1" *-- "many" Department : contains >
+    School "1" *-- "many" Student : enrolls >
+    Student "1" --> "1" Department : majors in >

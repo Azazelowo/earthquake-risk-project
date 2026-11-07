@@ -154,10 +154,15 @@ def external_features(spec, t0s, grid, base_dir=None):
         "t0": np.repeat(t0s.to_numpy(), grid.n_cells),
         "cell_id": np.tile(np.arange(grid.n_cells), len(t0s)),
     })
+    cov = f"f_{spec.name}_coverage"
     if not parts:
+        # 前兆資料和所有發布時間都不重疊：欄位照樣給（全缺值、覆蓋率 0），下游才不會因少欄位而失敗
+        for c in cols:
+            for a in spec.aggs:
+                skeleton[f"f_{spec.name}_{c}_{a}"] = np.nan
+        skeleton[cov] = 0.0
         return skeleton
     feats = pd.concat(parts, ignore_index=True)
     out = skeleton.merge(feats, on=["t0", "cell_id"], how="left")
-    cov = f"f_{spec.name}_coverage"
     out[cov] = out[cov].fillna(0.0)   # 覆蓋率 0 是已知事實（沒有資料），不是缺值
     return out

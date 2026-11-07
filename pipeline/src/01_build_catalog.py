@@ -220,6 +220,8 @@ def main():
     print(f"資料來源目錄：{DATA_DIR}")
     xml_files = sorted((DATA_DIR / "E-A0073-002").glob("CWA-EQ-Catalog-*.xml"))
     gdms_files = sorted((DATA_DIR / "earthquake_data" / "raw").glob("GDMS地震目錄_*.csv"))
+    # GDMS 網站直接下載的檔名（例如 2026-11 補抓的 2026-07-30 ~ 09-30），重疊部分由來源內去重處理
+    gdms_files += sorted((DATA_DIR / "earthquake_data").glob("GDMScatalog*.csv"))
 
     all_dfs = []
     for f in xml_files:

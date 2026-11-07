@@ -53,7 +53,7 @@ FREQ = "15min"
 
 def rinex_date(path):
     """由 RINEX 2 檔名 ssssDDDf.YYo 取得日期。"""
-    name = path.name
+    name = path.name[:-3] if path.name.endswith(".gz") else path.name
     doy, yy = int(name[4:7]), int(name[-3:-1])
     return pd.Timestamp(year=2000 + yy, month=1, day=1) + pd.Timedelta(days=doy - 1)
 
@@ -66,11 +66,15 @@ def process_day(path, download, log):
     else:
         nav_p = AUX_DIR / "brdc" / aux_data.brdc_url(date).rsplit("/", 1)[1]
         dcb_p = AUX_DIR / "dcb" / aux_data.cas_dcb_url(date).rsplit("/", 1)[1]
-    if not (nav_p and Path(nav_p).exists() and dcb_p and Path(dcb_p).exists()):
+    nav = rinex.read_gps_nav(nav_p) if nav_p and Path(nav_p).exists() else None
+    if nav is None and download:
+        # BKG 有些日子沒有 RINEX 2 星曆（例如 2024-03-22），改用多來源的 RINEX 3 混合星曆
+        nav, msg = aux_data.get_nav(date, AUX_DIR)
+        log.append(msg)
+    if nav is None or not (dcb_p and Path(dcb_p).exists()):
         log.append(f"{path.name}: 缺少星曆或 DCB，略過（請加 --download）")
         return None
     h, obs = rinex.read_obs(path)
-    nav = rinex.read_gps_nav(nav_p)
     dsb = aux_data.read_cas_dsb(dcb_p)
     st = tec.slant_tec(obs, nav, h["approx_xyz"])
     # 衛星 DCB 符號：兩種都試，取全天衛星間殘差較小者（全天資料一定有，區別力也足夠），兩者都記錄
@@ -92,8 +96,11 @@ def process_day(path, download, log):
     }
 
 
-def reference(series):
-    """每個 15 分鐘格的背景中位數與 IQR。回傳加上 ref_med、ref_iqr、ref_mode、n_ref 的表。"""
+def reference(series, exclude=(), min_days=MIN_REF_DAYS):
+    """每個 15 分鐘格的背景中位數與 IQR。回傳加上 ref_med、ref_iqr、ref_mode、n_ref 的表。
+
+    exclude：不當背景的日子（例如地磁擾動日）。
+    """
     s = series.copy()
     s["date"] = s.index.floor("D")
     s["slot"] = s.index - s["date"]
@@ -101,11 +108,11 @@ def reference(series):
     days = list(table.index)
     meds, iqrs, modes, nref = [], [], [], []
     for d in days:
-        prev = [x for x in days if d - pd.Timedelta(days=REF_DAYS) <= x < d]
-        if len(prev) >= MIN_REF_DAYS:
+        prev = [x for x in days if d - pd.Timedelta(days=REF_DAYS) <= x < d and x not in exclude]
+        if len(prev) >= min_days:
             ref_days, mode = prev, f"前 {REF_DAYS} 天"
         else:
-            ref_days, mode = [x for x in days if x != d], "其他所有可用天（暫定）"
+            ref_days, mode = [x for x in days if x != d and x not in exclude], "其他所有可用天（暫定）"
         ref = table.loc[ref_days]
         q1, med, q3 = ref.quantile(0.25), ref.median(), ref.quantile(0.75)
         meds.append(med)
@@ -114,8 +121,11 @@ def reference(series):
         nref.append(len(ref_days))
     med = pd.DataFrame(meds, index=days)
     iqr = pd.DataFrame(iqrs, index=days)
-    s["ref_med"] = [med.loc[d, sl] for d, sl in zip(s["date"], s["slot"])]
-    s["ref_iqr"] = [iqr.loc[d, sl] for d, sl in zip(s["date"], s["slot"])]
+    # 整天都沒有有效 VTEC 的日子不會出現在 pivot 表裡，查不到就給缺值
+    def look(tab, d, sl):
+        return tab.at[d, sl] if d in tab.index and sl in tab.columns else np.nan
+    s["ref_med"] = [look(med, d, sl) for d, sl in zip(s["date"], s["slot"])]
+    s["ref_iqr"] = [look(iqr, d, sl) for d, sl in zip(s["date"], s["slot"])]
     mode_map = dict(zip(days, modes))
     nref_map = dict(zip(days, nref))
     s["ref_mode"] = s["date"].map(mode_map)
@@ -153,11 +163,15 @@ def anomaly_runs(s, min_bins=4):
 def main():
     ap = argparse.ArgumentParser(description="NDH5 TEC 個案分析")
     ap.add_argument("--download", action="store_true", help="下載缺少的廣播星曆與 DCB")
+    ap.add_argument("--rinex-dir", default=str(RINEX_DIR),
+                    help="NDH5 觀測檔資料夾（.YYo 或 .YYo.gz），例如 E:\123\GNSS_ETEC")
     args = ap.parse_args()
 
-    files = sorted(RINEX_DIR.glob("*.[0-9][0-9]o"))
+    rdir = Path(args.rinex_dir)
+    files = sorted(list(rdir.glob("ndh5*.[0-9][0-9]o")) + list(rdir.glob("ndh5*.[0-9][0-9]o.gz")),
+                   key=lambda f: rinex_date(f))
     if not files:
-        sys.exit(f"{RINEX_DIR} 沒有 RINEX 觀測檔")
+        sys.exit(f"{rdir} 沒有 NDH5 的 RINEX 觀測檔")
     log = []
     days = [d for d in (process_day(f, args.download, log) for f in files) if d is not None]
     print("\n".join(log))
@@ -172,6 +186,7 @@ def main():
     series = tec.station_series(vt, FREQ)
     s = reference(series)
     runs = anomaly_runs(s)
+    sens = None
 
     # 太空天氣
     sw_path = BASE_DIR / "pipeline" / "data" / "space_weather_hourly.parquet"
@@ -203,6 +218,16 @@ def main():
         ref_mode=("ref_mode", "first"), n_ref=("n_ref_days", "first"))
     if sw is not None:
         daily = daily.join(swd, how="left")
+        # 敏感度：擾動日（Kp ≥ 4 或 Dst ≤ −30 nT）不當背景。寧靜日較少，最少 5 天即可（標示於報告）
+        dist_days = set(swd.index[(swd["kp_max"] >= 4) | (swd["dst_min"] <= -30)])
+        q = reference(series, exclude=dist_days, min_days=5)
+        q["day"] = q.index.floor("D")
+        sens = q.groupby("day").agg(
+            frac_above=("anom", lambda a: float((a == 1).mean())),
+            frac_below=("anom", lambda a: float((a == -1).mean())),
+            max_dvtec=("dvtec", "max"), min_dvtec=("dvtec", "min"),
+            ref_mode=("ref_mode", "first"), n_ref=("n_ref_days", "first"))
+        sens["disturbed"] = sens.index.isin(dist_days)
 
     # ---------- 輸出 ----------
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -225,7 +250,7 @@ def main():
     }
     (OUT_DIR / "ndh5_case_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2, default=str),
                                                  encoding="utf-8")
-    write_report(meta, daily_bias, daily, runs, s, figs, days)
+    write_report(meta, daily_bias, daily, runs, s, figs, days, sens)
     print(f"接收機偏差（中位數）：{rx_bias:.2f} TECU；各日：{daily_bias['bias'].round(2).tolist()}")
     print(daily.round(3).to_string())
     print(runs.to_string() if not runs.empty else "沒有連續 1 小時以上的超界時段")
@@ -292,7 +317,7 @@ def make_figures(s, sw, eq_time, rx_bias):
     return {"timeseries": "ndh5_vtec_timeseries.png"}
 
 
-def write_report(meta, daily_bias, daily, runs, s, figs, days):
+def write_report(meta, daily_bias, daily, runs, s, figs, days, sens=None):
     eq = meta["eq"]
     L = []
     L.append("# 個案分析：NDH5 GNSS 站 TEC 與 2024 花蓮地震")
@@ -421,10 +446,32 @@ def write_report(meta, daily_bias, daily, runs, s, figs, days):
             L.append("- 達到地磁擾動門檻（Kp ≥ 4 或 Dst ≤ −30 nT）的日子：" + "、".join(
                 f"{d:%m-%d}（Kp {r['kp_max']:.2f}、Dst {r['dst_min']:.0f}）" for d, r in dist.iterrows())
                 + "。這些日子的 TEC 變化可能有太空天氣的成分。")
-        L.append("- 在這 7 天內，震前日子的超界情形並沒有比其他日子突出；"
+        L.append(f"- 在這 {len(daily)} 天內，震前日子的超界情形並沒有比其他日子突出；"
                  "整週最大的正異常出現在非震前、地磁寧靜的日子，說明單日的 TEC 變異本來就可以這麼大。"
                  if top >= eq_t else
-                 "- 超界最多的日子在震前。但只有一個事件、背景值是暫定的，這不足以支持任何因果解讀（見下一節）。")
+                 "- 超界最多的日子在震前。但只有一個事件，這不足以支持任何因果解讀（見下一節）。")
+    L.append("")
+    if sens is not None and eq_t is not None:
+        L.append("")
+        L.append("### 3.1 敏感度：擾動日不當背景")
+        L.append("")
+        L.append("上表的背景包含地磁擾動日（例如 2024-03-24 的磁暴，Kp 8.3、Dst −128 nT）。"
+                 "磁暴期間 TEC 常大幅偏高，會把背景墊高、界線變寬。下表改成只用寧靜日當背景"
+                 "（寧靜日不足 10 天，所以最少 5 天即可；這是額外的不確定性）。")
+        L.append("")
+        L.append("| 日期 (UTC) | 擾動日 | 背景天數 | 高於上界 | 低於下界 | 最大 ΔVTEC | 最小 ΔVTEC |")
+        L.append("|---|---|---|---|---|---|---|")
+        for d, r in sens.iterrows():
+            if pd.isna(r["n_ref"]):
+                continue
+            L.append(f"| {d:%m-%d}{' ⭐' if d == eq_t.floor('D') else ''} | {'是' if r['disturbed'] else ''} | {int(r['n_ref'])}"
+                     f"{'（暫定）' if '暫定' in str(r['ref_mode']) else ''} | {r['frac_above']:.0%} | {r['frac_below']:.0%} "
+                     f"| {r['max_dvtec']:.1f} | {r['min_dvtec']:.1f} |")
+        pre_q = sens[(sens.index < eq_t) & (sens.index >= eq_t - pd.Timedelta(days=2))]
+        if not pre_q.empty:
+            L.append("")
+            L.append(f"- 震前兩天（{', '.join(f'{d:%m-%d}' for d in pre_q.index)}）高於上界的比例："
+                     + "、".join(f"{v:.0%}" for v in pre_q["frac_above"]) + "。")
     L.append("")
     L.append("## 4. 解讀時要注意")
     L.append("")
@@ -437,7 +484,8 @@ def write_report(meta, daily_bias, daily, runs, s, figs, days):
                  f"背景是用「其他所有可用天」算的，其中 {len(post)} 天在地震之後。"
                  "只要震後幾天電離層本身偏高或偏低，震前的日子就會被判成「異常」，反之亦然。")
     L.append("- **隨機也會超界**：中位數 ± 1.5 IQR 在常態分布下約等於 ±2σ，每天本來就約有 4% 的時間超界；"
-             "背景只用 6 天時，界線本身也很不穩，實際超界比例會更高。所以要看的是「震前是否比其他日子更常超界」，"
+             f"背景只用 {int(daily['n_ref'].min())}–{int(daily['n_ref'].max())} 天，界線本身也有抽樣誤差，實際超界比例會更高。"
+             "所以要看的是「震前是否比其他日子更常超界」，"
              "而不是「有沒有超界」。")
     L.append("- **太陽活動**：2024 年接近太陽極大期，電離層日變異本來就大。上表的 Kp、Dst 可以判斷有沒有磁暴；"
              "沒有磁暴也不代表沒有其他來源（例如太陽 EUV 變化、熱氣層風、行進式電離層擾動）。")
@@ -446,9 +494,14 @@ def write_report(meta, daily_bias, daily, runs, s, figs, days):
     L.append("")
     L.append("## 5. 下一步（取得更多資料後）")
     L.append("")
-    L.append(f"- 補齊 NDH5 在 2024-03-17 ～ 03-31 的 RINEX，讓 4/1–4/2 有真正的「前 {REF_DAYS} 天」背景值；"
-             "最好延伸到 4 月底，看震後是否回到背景。")
-    L.append("- 放進相同目錄後重新執行本程式即可，背景值會自動改用前 15 天。")
+    all_dates = pd.date_range(daily.index.min(), daily.index.max(), freq="D")
+    missing = [d for d in all_dates if d not in daily.index]
+    if missing:
+        L.append("- 觀測期間內缺少的日子：" + "、".join(f"{d:%m-%d}" for d in missing)
+                 + "（2026-11 向 GDMS 查詢 GNSS_ETEC 時，這些日子顯示「無資料」，原始資料就沒有）。")
+    if not prov.empty:
+        L.append(f"- 還有 {len(prov)} 天的背景是暫定的：補齊更早的 RINEX 後重新執行即可，背景會自動改用前 {REF_DAYS} 天。")
+    L.append("- GDMS 的 GNSS_ETEC 測網資料到 2024-04-07 為止，所以無法延伸到 4 月底檢查震後是否回到背景。")
     L.append("- 加入幾個遠離震央的測站（例如台灣西部或離島）作為對照。")
     L.append("- 系統性的檢驗：把 TEC 轉成「網格 × 日」特徵，接到 B3 框架，和基準模型比較。")
     L.append("")

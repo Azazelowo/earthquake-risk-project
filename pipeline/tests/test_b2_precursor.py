@@ -252,6 +252,64 @@ class TestStreamIO(unittest.TestCase):
             disp.finish()
             self.assertTrue((d / "b.zip").exists())
 
+    def test_stream_bounds_inflight_and_dedupes(self):
+        from concurrent.futures import Future
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            with zipfile.ZipFile(d / "all.zip", "w") as z:
+                for k in range(20):
+                    z.writestr(f"xcg201801{k + 1:02d}dsec.sec", f"day{k}")
+            (d / "copy").mkdir()
+            (d / "copy" / "xcg20180103dsec.sec").write_text("day2")      # 和 zip 內的 1/3 內容相同
+            (d / "copy" / "xcg20180130dsec.sec").write_text("bad")
+            m = stream_io.Manifest(d / "out" / "manifest.jsonl")
+            m.add(sha256=stream_io.sha256(b"day0"), name="x", status="ok")    # 1/1 以前處理過
+            disp = stream_io.RawDisposer(True, None, [])
+            stream = stream_io.Stream(m, disp, lambda n: MAG.parse_name(n)[1], max_inflight=4)
+            submitted, inflight, peak = [], [0], [0]
+
+            def submit(it, data, digest):
+                submitted.append(it.name)
+                inflight[0] += 1
+                peak[0] = max(peak[0], inflight[0])
+                f = Future()
+                f.set_result(data)
+                return f
+
+            seen = []
+            for job in stream.run(stream_io.iter_inbox(d, lambda n: n.endswith(".sec")), submit):
+                inflight[0] -= 1
+                ok = job.future.result() != b"bad"
+                seen.append((job.item.name, [x.name for x in job.dups]))
+                stream.done(job, ok)
+            disp.finish()
+            self.assertLessEqual(peak[0], 4)
+            self.assertEqual(len(submitted), 20)                  # 21 個檔 − 1/1 已處理 − 1/3 重複 + bad
+            self.assertEqual(stream.n_dup, 2)
+            self.assertEqual([n for n, _ in seen], sorted(n for n, _ in seen))    # 依檔名順序
+            self.assertIn(("xcg20180103dsec.sec", ["xcg20180103dsec.sec"]), seen)
+            self.assertFalse((d / "all.zip").exists())             # zip 全部成功 → 刪除（Windows 上要先關閉）
+            self.assertFalse((d / "copy" / "xcg20180103dsec.sec").exists())    # 重複檔跟著原檔處置
+            self.assertTrue((d / "copy" / "xcg20180130dsec.sec").exists())     # 失敗的不刪
+
+    def test_magnet_script_streams_zip(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            inbox, out = d / "inbox", d / "out"
+            inbox.mkdir()
+            with zipfile.ZipFile(inbox / "XCG.zip", "w", zipfile.ZIP_DEFLATED) as z:
+                for day in ("2026-10-29", "2026-10-30", "2026-10-31"):
+                    z.writestr(f"XCG/xcg{day.replace('-', '')}dsec.sec", iaga_text().replace("2026-10-31", day))
+            r = subprocess.run([sys.executable, str(SRC / "10_process_magnet.py"), "--inbox", str(inbox),
+                                "--out", str(out), "--delete-raw", "--workers", "1"],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertFalse((inbox / "XCG.zip").exists())
+            self.assertEqual(len(list((out / "daily" / "XCG").glob("*.json"))), 3)
+            lines = (out / "manifest.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 3)
+
 
 class TestB2Features(unittest.TestCase):
     def test_robust_z_uses_only_past(self):

@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 from concurrent.futures import ProcessPoolExecutor
@@ -35,7 +36,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gnss_tec import aux_data, orbit, rinex, tec  # noqa: E402
-from stream_io import Manifest, RawDisposer, iter_inbox, load_keep_windows, sha256  # noqa: E402
+from stream_io import Manifest, RawDisposer, Stream, iter_inbox, load_keep_windows  # noqa: E402
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 OUT_DIR = BASE_DIR / "pipeline" / "data" / "tec"
@@ -138,52 +139,50 @@ def main():
 
     items = iter_inbox(args.inbox, accept)
     print(f"收件匣：{args.inbox}，找到 {len(items)} 個 RINEX 觀測檔")
-    todo, n_dup = [], 0
-    for it in items:
-        data = it.read_bytes()
-        digest = sha256(data)
-        if manifest.seen(digest):
-            n_dup += 1
-            disposer.done(it, parse_name(it.name)[1], True)
-            continue
-        todo.append((it, digest, len(data)))
-    if n_dup:
-        print(f"已處理過（相同 SHA-256）：{n_dup} 個，略過")
+    date_of = lambda n: parse_name(n)[1]  # noqa: E731
+    # 分批串流：同時最多 workers × 2 個檔案在處理中；zip 成員只在處理時才解到暫存資料夾
+    stream = Stream(manifest, disposer, date_of, max_inflight=args.workers * 2)
 
-    # 輔助資料先依日期逐一下載（避免多個子程序同時下載同一個檔案）
-    dates = sorted({parse_name(it.name)[1] for it, _, _ in todo})
     aux = {}
-    for d in dates:
-        nav, msg = aux_data.get_nav(d, aux_dir)
-        p1p2, f1, age, l1 = aux_data.get_dcb(d, aux_dir)
-        p1c1, f2, _, l2 = aux_data.get_dcb(d, aux_dir, kind="p1c1")
-        cache = aux_dir / "nav_gps" / f"{d.year}" / f"{d.dayofyear:03d}.parquet"
-        aux[d] = {"nav": cache if nav is not None else None, "p1p2": p1p2, "p1c1": p1c1,
-                  "dcb_file": f1, "dcb_age_days": age, "p1c1_file": f2, "log": [msg] + l1 + l2}
-    print(f"輔助資料：{len(dates)} 天")
+
+    def get_aux(d):
+        """輔助資料在主程序依日期下載（避免多個子程序同時下載同一個檔案），每天只下載一次。"""
+        if d not in aux:
+            nav, msg = aux_data.get_nav(d, aux_dir)
+            p1p2, f1, age, l1 = aux_data.get_dcb(d, aux_dir)
+            p1c1, f2, _, l2 = aux_data.get_dcb(d, aux_dir, kind="p1c1")
+            cache = aux_dir / "nav_gps" / f"{d.year}" / f"{d.dayofyear:03d}.parquet"
+            aux[d] = {"nav": cache if nav is not None else None, "p1p2": p1p2, "p1c1": p1c1,
+                      "dcb_file": f1, "dcb_age_days": age, "p1c1_file": f2, "log": [msg] + l1 + l2}
+        return aux[d]
 
     tmp = Path(tempfile.mkdtemp(prefix="tec_"))
+    tmp_paths = {}
     n_ok = n_fail = 0
+
     with ProcessPoolExecutor(max_workers=args.workers) as ex:
-        futs = []
-        for it, digest, size in todo:
-            sta, d = parse_name(it.name)
-            a = aux[d]
+        def submit(it, data, digest):
+            nonlocal n_fail
+            d = date_of(it.name)
+            a = get_aux(d)
             if a["nav"] is None or a["p1p2"] is None:
-                manifest.add(sha256=digest, name=it.name, size=size, status="error",
+                manifest.add(sha256=digest, name=it.name, size=len(data), status="error",
                              error="缺少星曆或 DCB：" + " | ".join(a["log"]), version=VERSION)
                 disposer.done(it, d, False)
                 n_fail += 1
-                continue
+                return None
             path = it.path
             if it.member is not None:
-                path = tmp / it.name
-                path.write_bytes(it.read_bytes())
-            futs.append((it, digest, size, d, path,
-                         ex.submit(process_file, path, it.name, a["nav"], a["p1p2"], a["p1c1"])))
-        for k, (it, digest, size, d, path, fut) in enumerate(futs, 1):
+                path = tmp / f"{digest[:12]}_{it.name}"
+                path.write_bytes(data)
+                tmp_paths[digest] = path
+            return ex.submit(process_file, path, it.name, a["nav"], a["p1p2"], a["p1c1"])
+
+        for k, job in enumerate(stream.run(items, submit), 1):
+            it, digest, size = job.item, job.digest, job.size
+            d = date_of(it.name)
             try:
-                v, day = fut.result()
+                v, day = job.future.result()
                 day.update(dcb_file=aux[d]["dcb_file"], dcb_age_days=aux[d]["dcb_age_days"],
                            p1c1_file=aux[d]["p1c1_file"] if day["p1_from_c1"] else None)
                 sta = day["station"]
@@ -203,12 +202,16 @@ def main():
                 print(f"  失敗 {it}: {e}")
                 n_fail += 1
                 ok = False
-            if it.member is not None:
-                Path(path).unlink(missing_ok=True)
-            disposer.done(it, d, ok)
-            if k % 25 == 0 or k == len(futs):
-                print(f"  {k}/{len(futs)}")
+            p = tmp_paths.pop(digest, None)
+            if p is not None:
+                p.unlink(missing_ok=True)
+            stream.done(job, ok)
+            if k % 50 == 0:
+                print(f"  已處理 {k} 個（收件匣共 {len(items)} 個；輔助資料 {len(aux)} 天）")
     disposer.finish()
+    shutil.rmtree(tmp, ignore_errors=True)
+    if stream.n_dup:
+        print(f"已處理過或重複（相同 SHA-256）：{stream.n_dup} 個，略過")
     daily, _ = rebuild(out_dir)
     print(f"完成：成功 {n_ok}、失敗 {n_fail}；刪除原始檔 {disposer.deleted}、保留 {disposer.kept}")
     if daily is not None:

@@ -30,7 +30,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from geomag import iaga, ulf  # noqa: E402
-from stream_io import Manifest, RawDisposer, iter_inbox, load_keep_windows, sha256  # noqa: E402
+from stream_io import Manifest, RawDisposer, Stream, iter_inbox, load_keep_windows  # noqa: E402
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 OUT_DIR = BASE_DIR / "pipeline" / "data" / "magnet"
@@ -99,40 +99,32 @@ def main():
 
     items = iter_inbox(args.inbox, lambda n: parse_name(n)[0] is not None)
     print(f"收件匣：{args.inbox}，找到 {len(items)} 個 MAGNET 日檔")
-    todo, n_dup = [], 0
-    for it in items:
-        data = it.read_bytes()
-        digest = sha256(data)
-        if manifest.seen(digest):
-            n_dup += 1
-            disposer.done(it, parse_name(it.name)[1], True)
-            continue
-        todo.append((it, data, digest))
-    if n_dup:
-        print(f"已處理過（相同 SHA-256）：{n_dup} 個，略過")
+    # 分批串流：同時最多 workers × 2 個日檔在記憶體裡（每個約 6 MB），整站 9 年的 zip 也不會撐爆
+    stream = Stream(manifest, disposer, lambda n: parse_name(n)[1], max_inflight=args.workers * 2)
 
     n_ok = n_fail = 0
     with ProcessPoolExecutor(max_workers=args.workers) as ex:
-        futs = [(it, digest, len(data), ex.submit(process_bytes, data, it.name)) for it, data, digest in todo]
-        for k, (it, digest, size, fut) in enumerate(futs, 1):
-            sta, date = parse_name(it.name)
+        for k, job in enumerate(stream.run(items, lambda it, data, _: ex.submit(process_bytes, data, it.name)), 1):
+            it = job.item
             try:
-                head, summary, minute = fut.result()
+                head, summary, minute = job.future.result()
                 row = write_outputs(out_dir, head, summary, minute)
-                manifest.add(sha256=digest, name=it.name, size=size, status="ok", station=row["station"],
+                manifest.add(sha256=job.digest, name=it.name, size=job.size, status="ok", station=row["station"],
                              date=row["date"], coverage=round(row["coverage"], 4), version=VERSION)
                 n_ok += 1
                 ok = True
             except Exception as e:  # noqa: BLE001
-                manifest.add(sha256=digest, name=it.name, size=size, status="error", error=repr(e),
+                manifest.add(sha256=job.digest, name=it.name, size=job.size, status="error", error=repr(e),
                              version=VERSION)
                 print(f"  失敗 {it}: {e}")
                 n_fail += 1
                 ok = False
-            disposer.done(it, date, ok)
-            if k % 50 == 0 or k == len(futs):
-                print(f"  {k}/{len(futs)}")
+            stream.done(job, ok)
+            if k % 100 == 0:
+                print(f"  已處理 {k} 個（收件匣共 {len(items)} 個）")
     disposer.finish()
+    if stream.n_dup:
+        print(f"已處理過或重複（相同 SHA-256）：{stream.n_dup} 個，略過")
     daily = rebuild_daily(out_dir)
     print(f"完成：成功 {n_ok}、失敗 {n_fail}；刪除原始檔 {disposer.deleted}、保留 {disposer.kept}")
     if daily is not None:

@@ -7,6 +7,8 @@
 - 處理成功後，依設定刪除原始檔；但若檔案日期落在「保留事件窗口」內（M≥5.5 主震前後 N 天），
   改成搬到 keep 資料夾，以便日後用別的方法重算。
 - 處理失敗的檔案一律不刪，manifest 記下原因。
+- 分批串流（Stream）：一次只讀進「同時處理中」的幾個檔案。GDMS 可以一次下載整站 9 年
+  （例如 XCG 2018–2026 一個 zip 1.4 GB，解開約 10–20 GB），全部讀進記憶體會不夠。
 """
 import datetime as dt
 import hashlib
@@ -14,9 +16,27 @@ import io
 import json
 import shutil
 import zipfile
+from collections import deque
 from pathlib import Path
 
 import pandas as pd
+
+_ZIPS = {}
+
+
+def _zip(path):
+    """重複使用已開啟的 zip（整站 9 年的 zip 有數千個成員，每讀一個就重開一次很慢）。"""
+    z = _ZIPS.get(path)
+    if z is None:
+        z = _ZIPS[path] = zipfile.ZipFile(path)
+    return z
+
+
+def close_zips():
+    """關閉所有開啟中的 zip。Windows 上 zip 開著就刪不掉，所以刪檔前要先呼叫。"""
+    for z in _ZIPS.values():
+        z.close()
+    _ZIPS.clear()
 
 
 class RawItem:
@@ -30,8 +50,7 @@ class RawItem:
     def read_bytes(self):
         if self.member is None:
             return self.path.read_bytes()
-        with zipfile.ZipFile(self.path) as z:
-            return z.read(self.member)
+        return _zip(self.path).read(self.member)
 
     def open_binary(self):
         return io.BytesIO(self.read_bytes())
@@ -138,7 +157,74 @@ class RawDisposer:
             self.deleted += 1
 
     def finish(self):
+        close_zips()
         for z, ok in self.zip_ok.items():
             if ok and self.delete and z.exists():
                 z.unlink()
                 self.deleted += 1
+
+
+class Stream:
+    """分批串流：逐一讀檔、算 SHA-256、送去處理，同時處理中的檔案最多 max_inflight 個。
+
+    用法：
+        stream = Stream(manifest, disposer, date_of, max_inflight=workers * 2)
+        for job in stream.run(items, submit):      # submit(item, data, digest) → Future 或 None
+            ok = ...處理 job.future.result()，寫 manifest...
+            stream.done(job, ok)
+    - manifest 已有的（相同內容處理成功過）直接當成功處置，不再處理。
+    - 同一批裡內容相同的檔案（例如 GNSS 與 GNSS_ALL 各放一份）只處理一次，結果套用到兩份。
+    - submit 回傳 None 表示它自己已經記錄失敗並處置原始檔，這個檔案就跳過。
+    - 依收件匣順序回傳，manifest 的順序和以前一樣。
+    """
+
+    class Job:
+        def __init__(self, item, digest, size, future):
+            self.item, self.digest, self.size, self.future = item, digest, size, future
+            self.dups = []
+
+    def __init__(self, manifest, disposer, date_of, max_inflight=8):
+        self.manifest, self.disposer, self.date_of = manifest, disposer, date_of
+        self.max_inflight = max(1, int(max_inflight))
+        self.n_dup = 0
+        self.n_items = 0
+        self.max_seen_inflight = 0
+
+    def run(self, items, submit):
+        queue, pending = deque(), {}
+        for it in items:
+            self.n_items += 1
+            data = it.read_bytes()
+            digest = sha256(data)
+            if self.manifest.seen(digest):
+                self.n_dup += 1
+                self.disposer.done(it, self.date_of(it.name), True)
+                continue
+            if digest in pending:
+                self.n_dup += 1
+                pending[digest].dups.append(it)
+                continue
+            fut = submit(it, data, digest)
+            size = len(data)
+            del data
+            if fut is None:
+                continue
+            job = self.Job(it, digest, size, fut)
+            pending[digest] = job
+            queue.append(job)
+            self.max_seen_inflight = max(self.max_seen_inflight, len(queue))
+            while len(queue) >= self.max_inflight:
+                job = queue.popleft()
+                pending.pop(job.digest, None)
+                yield job
+        while queue:
+            job = queue.popleft()
+            pending.pop(job.digest, None)
+            yield job
+
+    def done(self, job, ok):
+        """處置這個檔案以及同內容的重複檔案。"""
+        date = self.date_of(job.item.name)
+        self.disposer.done(job.item, date, ok)
+        for d in job.dups:
+            self.disposer.done(d, self.date_of(d.name), ok)

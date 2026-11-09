@@ -74,6 +74,9 @@ python pipeline\src\10_process_magnet.py --inbox "C:\Users\...\Downloads\GDMS_in
 python pipeline\src\11_process_gnss_tec.py --inbox "C:\Users\...\Downloads\GDMS_inbox" --delete-raw --workers 12 `
     --keep-events docs\b2_download_plan\event_list_M55_mainshocks_2018_2026.csv --keep-days 7
 
+# 每處理完一批：看哪些站年還缺、哪些檔案失敗，決定下一批要抓什麼
+python pipeline\src\12_quality_report.py      # → docs\reports\b2_data_quality\README.md
+
 # 全部下載完（或任何時候想看目前結果）：
 python pipeline\src\00_download_space_weather.py --offline   # 已下載過就加 --offline
 python pipeline\src\02_clean_features.py

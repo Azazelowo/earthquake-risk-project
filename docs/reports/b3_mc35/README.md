@@ -1,6 +1,6 @@
 # B3 基準模型回測報告（mc35）
 
-> 由 `pipeline/src/03_train_backtest.py` 自動產生於 2026-11-10 23:28，所有數字來自同目錄設定下的 `pipeline/data/b3_<tag>/metrics.json`。重新執行會覆寫本檔。
+> 由 `pipeline/src/03_train_backtest.py` 自動產生於 2026-11-10 23:41，所有數字來自同目錄設定下的 `pipeline/data/b3_<tag>/metrics.json`。重新執行會覆寫本檔。
 
 ## 這份報告回答什麼
 

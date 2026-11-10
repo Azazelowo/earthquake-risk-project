@@ -1,6 +1,6 @@
 {
-  "_comment": "FR-B2-20 分段 Mc：和 b3_baseline 相同，只把目錄特徵門檻改成隨年份變動（04_estimate_mc.py 產生，不低於 3.0）。",
-  "tag": "baseline_mcyear",
+  "_comment": "FR-B2-20 對照組：舊作法，目錄特徵全期間固定用 ML ≥ 3.0（2026-11-10 以前的 b3_baseline）。現在 b3_baseline 改用分段門檻，這個檔只用來比較兩者。",
+  "tag": "ml3fixed",
   "region": {
     "lat_min": 21.0,
     "lat_max": 26.0,
@@ -49,6 +49,5 @@
   ],
   "n_bootstrap": 2000,
   "seed": 42,
-  "external_features": [],
-  "feature_min_ml_by_year": "pipeline/configs/feature_min_ml_by_year.csv"
+  "external_features": []
 }

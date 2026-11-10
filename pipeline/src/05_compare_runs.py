@@ -6,7 +6,7 @@
 
 輸入：pipeline/data/b3_<tag>/predictions.parquet、targets.parquet
 用法：
-    python pipeline/src/05_compare_runs.py --base baseline --runs baseline_mcyear mc35 \\
+    python pipeline/src/05_compare_runs.py --base ml3fixed --runs baseline mc35 \\
         --out docs/reports/catalog_mc/b3_impact.md
 """
 import argparse

@@ -52,8 +52,8 @@ python pipeline\src\12_quality_report.py           # B2：資料品質報告（�
 python pipeline\src\02_clean_features.py           # B2：網格 × 日 前兆特徵
 python pipeline\src\03_train_backtest.py --config pipeline\configs\b3_precursor.json   # 目錄 vs 目錄＋前兆
 python pipeline\src\04_estimate_mc.py              # 分段 Mc → configs\feature_min_ml_by_year.csv（需 EQ_DATA_DIR）
-python pipeline\src\03_train_backtest.py --config pipeline\configs\b3_baseline_mcyear.json   # 目錄特徵用分段門檻
-python pipeline\src\05_compare_runs.py --base baseline --runs baseline_mcyear mc35   # 配對比較兩次回測
+python pipeline\src\03_train_backtest.py --config pipeline\configs\b3_ml3fixed.json   # 對照：舊作法，全期間固定 ML≥3
+python pipeline\src\05_compare_runs.py --base ml3fixed --runs baseline mc35   # 配對比較兩次回測
 python pipeline\src\03_train_backtest.py --sanity-check
 python pipeline\src\03_train_backtest.py --config pipeline\configs\b3_cell0p5.json
 python pipeline\src\case_ndh5_tec.py --download --rinex-dir E:\123\GNSS_ETEC    # NDH5 TEC 個案

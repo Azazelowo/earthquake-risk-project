@@ -50,7 +50,7 @@ class Config:
     decluster_fs_time_prop: float = 0.1           # 前震視窗 = 此比例 × 餘震時間視窗
     decluster_min_ml: float = 3.0                 # 只對 ML >= 此值的事件做去群聚
     # 特徵
-    feature_min_ml: float = 3.0                   # 高於所有年代的 Mc（1990 年代約 2.25）
+    feature_min_ml: float = 3.0                   # 目錄特徵門檻的下限（設定 feature_min_ml_by_year 時，各年門檻不低於此值）
     # 隨年份變動的門檻（04_estimate_mc.py 產生的 CSV：year, threshold）；設定時每個事件用它那一年的門檻，
     # 且不低於 feature_min_ml。null = 全期間用 feature_min_ml。路徑相對於專案根目錄。
     feature_min_ml_by_year: str | None = None

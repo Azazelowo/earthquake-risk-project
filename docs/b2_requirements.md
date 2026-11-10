@@ -86,7 +86,7 @@
 | FR-B2-17 | 背景值不得跨越儀器更換日：儀器識別碼改變，或接收機偏差和前 5 天中位數相差 > 8 TECU，就切成新的一段 | 高 | ✅（TEC）／❌（地磁） | NDHU 2026-10-20 換機（型號相同、序號不同）後不再出現假異常；地磁沒有換機紀錄可查 |
 | FR-B2-18 | 系統應把測站指標對應到 0.2° 網格：取當天有資料、距離最近的測站；地磁限 150 km、TEC 限 300 km；超出範圍為缺值、不補 0 | 高 | ✅ | XCG 對應到 156 個網格；當天沒資料的測站不會被選中 |
 | FR-B2-19 | 地磁與 TEC 特徵應分成兩個檔，避免 B3 的覆蓋率互相灌水 | 高 | ✅ | `features_magnet.parquet`、`features_tec.parquet` |
-| FR-B2-20 | 套用 [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md) 第 3.2 節「探索性分析」的改法（2026-11-10 使用者確認）：**分段 Mc** → 去群聚 → 模型比較。Mc 隨年代變動，不宜全期間套單一 Mc。**這是目錄端（B1／B3 目錄特徵）的改動**，B2 的地磁／TEC 特徵不用 Mc；去群聚與基準模型比較 B3 已完成，缺的是分段 Mc | 高 | 🔶（已確認、作法待使用者決定） | 現況：`01_build_catalog.py` 固定 MC = 2.0；B3 目錄特徵用 ML ≥ 3（`feature_min_ml`）。2026-11-10 快速檢查（`events.parquet`，最大曲率法 +0.2）：1990–1992 全區 Mc ≈ 3.0–3.1；**東部外海（lon ≥ 121.8）1990 年代 ≈ 3.3、2000 年代 ≈ 3.4**，ML ≥ 3 在那裡不完整，而 ML ≥ 5.5 目標有 51% 在東部外海；2018 年後各區 ≤ 2.6，`b3_precursor` 影響小 |
+| FR-B2-20 | 套用 [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md) 第 3.2 節「探索性分析」的改法（2026-11-10 使用者確認，選作法 A）：**分段 Mc** → 去群聚 → 模型比較。**這是目錄端（B1／B3 目錄特徵）的改動**，B2 的地磁／TEC 特徵不用 Mc | 高 | ✅ | `04_estimate_mc.py`：GDMS 原始目錄（不先刪 ML<2）每「年 × 區」估 Mc（MAXC+0.2 與 GFT90 取大者，事件不足時往前併年，最多 5 年）→ `pipeline/configs/feature_min_ml_by_year.csv`（第 Y 年門檻只用 Y−1 以前的資料，不低於 3.0）；B3 設定 `feature_min_ml_by_year`。結果見 [catalog_mc](reports/catalog_mc/README.md)：37 年中 6 年門檻 > 3.0（1990–1991 本島 3.1；2009–2012 東部外海 3.4–3.7）。對 B3 測試期影響小且不顯著：ΔASS +0.003（95% CI −0.001～+0.006），固定 ML≥3.5 敏感度 +0.007（−0.000～+0.014）；前兆版完全不變（[b3_impact](reports/catalog_mc/b3_impact.md)）。**更正**：先前快速檢查的「東部外海 1990 年代 Mc ≈ 3.3」只靠十年不到 30 筆事件，不可靠；早期外海的主要問題是 Gap ≤ 110 篩選刪掉大部分外海事件，不是 Mc |
 
 ### 3.5 接上 B3 與成果
 
@@ -110,7 +110,7 @@
 | NFR-B2-05 | **可追溯**：每個原始檔的雜湊、處理時間、程式版本、DCB 來源都有紀錄 | 高 | ✅ | `manifest.jsonl`、每站日的 `daily/*.json` |
 | NFR-B2-06 | **可重現**：所有影響結果的參數集中寫成常數或設定檔 | 高 | ✅ | `ulf.py`、`02_clean_features.py` 的常數；`b3_precursor.json` |
 | NFR-B2-07 | **容錯**：單一檔案失敗不影響其他檔案；失敗原因寫入紀錄 | 高 | ✅ | 星曆缺漏、黎明前衛星不足等情況都有明確錯誤訊息 |
-| NFR-B2-08 | **測試**：新功能有單元測試，以合成資料為主，不依賴本機大型資料 | 高 | ✅ | 31 項 B2 測試，全部 75 項通過；只附一個 834 位元組的 DCB 樣本 |
+| NFR-B2-08 | **測試**：新功能有單元測試，以合成資料為主，不依賴本機大型資料 | 高 | ✅ | 40 項 B2 測試（含分段 Mc 9 項），全部 84 項通過；只附一個 834 位元組的 DCB 樣本 |
 | NFR-B2-09 | **版本控制**：程式、設定、報告進 git；原始資料與中間產物不進 git | 高 | ✅ | `pipeline/data/`、`earthquake_data/` 由 .gitignore 排除 |
 | NFR-B2-10 | **環境**：Windows、Python 3.13，套件版本固定在 `requirements.txt` | 中 | ✅ | 不需另外安裝套件 |
 | NFR-B2-11 | **科學誠實**：報告必須說明單一事件不能當證據、主震數少、太陽活動可能造成混淆 | 高 | ✅（NDH5）／⏳（B3） | NDH5 報告已揭露；B3 比較報告產出時要一併寫明 |
@@ -189,6 +189,7 @@
 | FR-B2-17 | `02_clean_features.py::instrument_segments` | `TestB2Features.test_instrument_segments` |
 | FR-B2-18～19 | `02_clean_features.py::to_grid` | `TestB2Features.test_to_grid_radius_and_availability` |
 | FR-B2-21 | `eqforecast/features.py::external_features`、`configs/b3_precursor.json` | `TestB2Features.test_external_features_without_overlap` |
+| FR-B2-20 | `04_estimate_mc.py`、`eqforecast/features.py::event_min_ml`、`05_compare_runs.py` | `test_catalog_mc.py`（MAXC／GFT 在合成 GR 目錄找回 Mc、b 值、併年、只用前一年、門檻查表、配對比較） |
 | FR-B2-23 | `12_quality_report.py` | `test_b2_quality.py::TestQualityReport`（涵蓋率、缺口、備選站、失敗檔案、DCB、TEC 換段、地磁候選、端到端） |
 
 ---
@@ -197,7 +198,7 @@
 
 | 順序 | 工作 | 負責 | 對應需求 |
 |---|---|---|---|
-| 1 | ~~確認「第 3.2 節的改法」指的是哪份文件~~（= PROJECT_OVERVIEW 3.2 分段 Mc，2026-11-10）；決定分段 Mc 的作法後實作並重跑 B3 | 使用者決定、開發實作 | FR-B2-20 |
+| 1 | ~~確認「第 3.2 節的改法」並實作分段 Mc~~（2026-11-10 完成）；是否把 `b3_baseline`／`b3_precursor` 預設改用分段門檻，待使用者決定 | 使用者 | FR-B2-20 |
 | 2 | 依下載清單先抓 MAGNET（含 KMN），邊抓邊執行 `10_process_magnet.py` | 使用者下載、程式處理 | FR-B2-06～09 |
 | 3 | 抓 GNSS 10 站，執行 `11_process_gnss_tec.py` | 同上 | FR-B2-10～13 |
 | 4 | ~~撰寫資料品質報告程式~~（2026-11-10 完成）；每處理完一批就跑 `12_quality_report.py`，依「需要補抓」表決定下一批 | 開發 | FR-B2-23 |

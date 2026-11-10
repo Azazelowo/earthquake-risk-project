@@ -111,6 +111,8 @@ flowchart LR
 - 建議的流程：分段 Mc → declustering → ETAS／Poisson／NB 比較，不直接套 ARIMA 或黑箱 ML。
 
 > ⚠️ 這份報告建議不要用單一 Mc，但提案和 `01_build_catalog.py` 都把 Mc 固定為 2.0。1990 年代的 Mc 約 2.25，固定用 2.0 會讓早期資料不完整 [推測]。
+>
+> **2026-11-10 已處理（FR-B2-20）**：`04_estimate_mc.py` 估各年 × 區的 Mc，B3 目錄特徵可改用隨年份變動的門檻；對回測結果影響小且不顯著。詳見 [catalog_mc](reports/catalog_mc/README.md)。
 
 ### 3.3 程式碼
 

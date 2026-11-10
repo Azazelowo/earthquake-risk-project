@@ -167,7 +167,9 @@ def write_report(summary, cat, grid, feats, ranks, n_cells, cfg, rep_dir, split_
     depth = "不限" if cfg.target_max_depth_km is None else f"≤ {cfg.target_max_depth_km} km"
     L.append(f"| 目標事件 | ML ≥ {cfg.target_ml}、深度 {depth}、去群聚後的主震 |")
     L.append(f"| 去群聚 | {cfg.decluster_method}，前震視窗比例 {cfg.decluster_fs_time_prop} |")
-    L.append(f"| 特徵事件 | ML ≥ {cfg.feature_min_ml}（`events.parquet` 全部列：Gap≤110 或未知，加上 ML≥5.5 目標） |")
+    thr = (f"ML ≥ 各年門檻（`{cfg.feature_min_ml_by_year}`，不低於 {cfg.feature_min_ml}）"
+           if getattr(cfg, "feature_min_ml_by_year", None) else f"ML ≥ {cfg.feature_min_ml}")
+    L.append(f"| 特徵事件 | {thr}（`events.parquet` 全部列：Gap≤110 或未知，加上 ML≥5.5 目標） |")
     sp = cfg.splits
     L.append(f"| 時間切分 | 訓練 {sp['train'][0]}～{sp['train'][1]}、驗證 {sp['val'][0]}～{sp['val'][1]}、"
              f"測試 {sp['test'][0]}～{sp['test'][1] or d['catalog_end'][:10]}（右端不含） |")

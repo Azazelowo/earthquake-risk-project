@@ -51,6 +51,9 @@ python pipeline\src\11_process_gnss_tec.py --inbox <下載資料夾> --delete-ra
 python pipeline\src\12_quality_report.py           # B2：資料品質報告（涵蓋率、缺口、失敗檔案、換儀器）
 python pipeline\src\02_clean_features.py           # B2：網格 × 日 前兆特徵
 python pipeline\src\03_train_backtest.py --config pipeline\configs\b3_precursor.json   # 目錄 vs 目錄＋前兆
+python pipeline\src\04_estimate_mc.py              # 分段 Mc → configs\feature_min_ml_by_year.csv（需 EQ_DATA_DIR）
+python pipeline\src\03_train_backtest.py --config pipeline\configs\b3_baseline_mcyear.json   # 目錄特徵用分段門檻
+python pipeline\src\05_compare_runs.py --base baseline --runs baseline_mcyear mc35   # 配對比較兩次回測
 python pipeline\src\03_train_backtest.py --sanity-check
 python pipeline\src\03_train_backtest.py --config pipeline\configs\b3_cell0p5.json
 python pipeline\src\case_ndh5_tec.py --download --rinex-dir E:\123\GNSS_ETEC    # NDH5 TEC 個案
@@ -68,6 +71,8 @@ python -m unittest discover -s pipeline\tests -v   # 單元測試（合成資料
 | `11_process_gnss_tec.py` | 收件匣（GDMS GNSS `.YYo(.gz)`）；網路：BKG 星曆、CODE 每月 DCB | `tec/tec_15min.parquet`、`tec/tec_daily.parquet`、`manifest.jsonl` | 每站 15 分鐘 VTEC；記錄儀器識別、DCB 來源與距今天數。多核心平行 |
 | `12_quality_report.py` | `magnet/`、`tec/` 的 `manifest.jsonl` 與 `daily/*.json` | `docs/reports/b2_data_quality/`（README 與 CSV） | 每站每年可用率、需補抓的站年（附備選站）、≥ 7 天缺口、失敗檔案與原因、DCB 沿用天數、儀器更換日。不需原始檔與網路 |
 | `02_clean_features.py` | 上面兩者的輸出、`space_weather_daily.parquet` | `features_magnet.parquet`、`features_tec.parquet`、`station_anomalies.parquet` | 0.2° 網格 × 日。背景只用過去的寧靜日；換儀器不跨段；地磁取 150 km 內、TEC 取 300 km 內最近測站 |
+| `04_estimate_mc.py` | GDMS 原始目錄（不先刪 ML<2） | `docs/reports/catalog_mc/`、`pipeline/configs/feature_min_ml_by_year.csv` | 每「年 × 區」的完備規模（MAXC+0.2、GFT90），事件不足時往前併年；第 Y 年的特徵門檻只用 Y−1 以前的資料，不低於 3.0（FR-B2-20） |
+| `05_compare_runs.py` | `b3_<tag>/predictions.parquet`、`targets.parquet` | Markdown | 兩次以上回測（只改特徵）的配對比較：ΔASS 信賴區間、各 τ 的 McNemar |
 | `03_train_backtest.py` | `events.parquet`、設定檔 `pipeline/configs/*.json` | `b3_<tag>/`（預測、目標、特徵、`metrics.json`） | **B3 基準模型**：去群聚、目標定義、時間切分、POD／FAR／CSI。報告在 `docs/reports/b3_<tag>/` |
 | `case_ndh5_tec.py` | `地震預測/測地法/GNSS_ETEC/*.24o`；下載廣播星曆與 DCB 到 `地震預測/測地法/aux/` | `tec/ndh5_vtec_15min.parquet`（與 `.csv`） | 2024 花蓮地震的單一個案展示。報告在 `docs/reports/case_ndh5_2024hualien/` |
 

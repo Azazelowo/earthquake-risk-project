@@ -47,6 +47,26 @@ def _log_share(count, n_cells):
     return np.log10((count + 0.1) / (total + 0.1 * n_cells))
 
 
+def event_min_ml(times, floor, table_path=None, base_dir=None):
+    """每個事件適用的特徵門檻。table_path 為 None 時全部是 floor。
+
+    表格（04_estimate_mc.py 產生）每年一個門檻；表格之前的年份用第一年、之後的年份用最後一年。
+    門檻不會低於 floor。
+    """
+    years = pd.to_datetime(pd.Series(times)).dt.year.to_numpy()
+    if not table_path:
+        return np.full(len(years), float(floor))
+    from pathlib import Path
+    p = Path(table_path)
+    if not p.is_absolute() and base_dir is not None:
+        p = Path(base_dir) / p
+    tab = pd.read_csv(p).sort_values("year")
+    y = tab["year"].to_numpy(int)
+    thr = tab["threshold"].to_numpy(float)
+    idx = np.clip(np.searchsorted(y, years, side="right") - 1, 0, len(y) - 1)
+    return np.maximum(thr[idx], float(floor))
+
+
 def catalog_features(events, cell_ids, t0s, grid, min_ml=3.0):
     """回傳樣本表 (t0, cell_id, f_*)，列順序與 targets.build_targets 相同。"""
     t0s = pd.DatetimeIndex(t0s)

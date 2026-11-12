@@ -1,0 +1,69 @@
+name: Fractal report archive
+
+# 每天存檔「全球強震碎形分析日報」的當日頁面到 fractal-archive 分支。
+# 該站首頁只顯示當天的警戒區；要事後驗證命中率，必須有當天留下的副本。
+# 對方約在台北時間 06:06 出刊。一天跑三次：第一次存檔，後兩次是補救（暫時抓不到、或對方當天改版）。
+# 腳本以 version.json 的 report_date + revision 判斷是否已存過，重複執行不會重複存。
+
+on:
+  schedule:
+    - cron: "30 23 * * *"   # 07:30 台北
+    - cron: "30 5 * * *"    # 13:30 台北
+    - cron: "30 13 * * *"   # 21:30 台北
+  workflow_dispatch:
+  push:
+    paths:
+      - scripts/archive_fractal_report.py
+      - .github/workflows/fractal-archive.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fractal-archive
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out archive branch
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --heads origin fractal-archive >/dev/null; then
+            git fetch --depth 1 origin fractal-archive
+            git worktree add archive FETCH_HEAD
+            git -C archive switch -c fractal-archive
+          else
+            git worktree add --detach archive
+            git -C archive switch --orphan fractal-archive
+            git -C archive rm -rfq --ignore-unmatch . || true
+            printf '%s\n' '# fractal-archive' '' \
+              '由 .github/workflows/fractal-archive.yml 每日自動存檔，請勿手動修改。' \
+              '結構：<report_date>/<revision>/ 內為當時抓到的頁面與 manifest.json（含 SHA256 與抓取時間）；index.jsonl 為每次存檔的摘要。' \
+              > archive/README.md
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Archive today's report
+        run: python scripts/archive_fractal_report.py --out archive
+
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+          cd archive
+          git add -A
+          if git diff --cached --quiet; then
+            echo "沒有新內容"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "Archive fractal report $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push origin fractal-archive

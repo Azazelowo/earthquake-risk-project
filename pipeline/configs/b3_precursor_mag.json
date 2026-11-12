@@ -1,0 +1,36 @@
+{
+  "_comment": "b3_precursor.json 的地磁版：TEC 2018–2026 資料尚未下載，先只接地磁特徵，其餘設定完全相同。注意：地磁的共同擾動扣除特徵要 2020-10 之後才有足夠測站，訓練期（2018–2022）前半幾乎全是缺值；主震數少，信賴區間會很寬。",
+  "tag": "precursor_mag",
+  "region": {"lat_min": 21.0, "lat_max": 26.0, "lon_min": 119.0, "lon_max": 123.0},
+  "cell_deg": 0.2,
+  "horizon_days": 30,
+  "issue_start": "2018-01-01",
+  "target_ml": 5.5,
+  "target_max_depth_km": null,
+  "decluster_method": "gardner_knopoff",
+  "decluster_fs_time_prop": 0.1,
+  "decluster_min_ml": 3.0,
+  "feature_min_ml": 3.0,
+  "feature_min_ml_by_year": "pipeline/configs/feature_min_ml_by_year.csv",
+  "splits": {
+    "train": ["2018-01-01", "2022-01-01"],
+    "val": ["2022-01-01", "2024-01-01"],
+    "test": ["2024-01-01", null]
+  },
+  "embargo_days": 0,
+  "taus": [0.01, 0.02, 0.05, 0.10],
+  "models": ["random", "ri", "logistic"],
+  "logistic_C_grid": [0.01, 0.1, 1.0],
+  "n_bootstrap": 2000,
+  "seed": 42,
+  "external_features": [
+    {
+      "name": "mag",
+      "path": "pipeline/data/features_magnet.parquet",
+      "lat_col": "lat_bin", "lon_col": "lon_bin", "native_cell_deg": 0.2, "time_col": "time_bin",
+      "value_cols": ["mag_pol_z", "mag_sz_z", "mag_szref_z", "mag_sznet_z", "mag_szres_z"],
+      "lookback_days": 30,
+      "aggs": ["mean", "max"]
+    }
+  ]
+}

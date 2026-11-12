@@ -23,20 +23,23 @@
 """
 import argparse
 import json
-import os
 import re
 import shutil
 import sys
 import tempfile
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import blas_threads  # noqa: E402,F401  必須在 numpy／pandas 之前：每個程序只用 1 條運算執行緒
+
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+
 from gnss_tec import aux_data, orbit, rinex, tec  # noqa: E402
-from stream_io import Manifest, RawDisposer, Stream, iter_inbox, load_keep_windows  # noqa: E402
+from stream_io import (POOL_BROKEN_MSG, Manifest, RawDisposer, Stream, default_workers,  # noqa: E402
+                       iter_inbox, load_keep_windows)
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 OUT_DIR = BASE_DIR / "pipeline" / "data" / "tec"
@@ -122,7 +125,8 @@ def main():
     ap.add_argument("--keep-days", type=int, default=7)
     ap.add_argument("--keep-dir", default=None)
     ap.add_argument("--stations", default=None, help="只處理這些測站（逗號分隔），其餘不動")
-    ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) // 2))
+    ap.add_argument("--workers", type=int, default=default_workers(),
+                    help="平行處理的程序數（預設為核心數的一半、最多 4；記憶體不足時請調低）")
     args = ap.parse_args()
 
     out_dir = Path(args.out)
@@ -137,10 +141,12 @@ def main():
         sta, _ = parse_name(n)
         return sta is not None and (only is None or sta in only)
 
-    items = iter_inbox(args.inbox, accept)
+    # protect：用 --stations 只處理部分測站時，壓縮檔裡其他測站的觀測檔還沒處理，
+    # 這種壓縮檔即使加了 --delete-raw 也不能刪（說明寫的是「其餘不動」）。
+    items = iter_inbox(args.inbox, accept, protect=lambda n: parse_name(n)[0] is not None)
     print(f"收件匣：{args.inbox}，找到 {len(items)} 個 RINEX 觀測檔")
     date_of = lambda n: parse_name(n)[1]  # noqa: E731
-    # 分批串流：同時最多 workers × 2 個檔案在處理中；zip 成員只在處理時才解到暫存資料夾
+    # 分批串流：同時最多 workers × 2 個檔案在處理中；壓縮檔成員只在處理時才解到暫存資料夾
     stream = Stream(manifest, disposer, date_of, max_inflight=args.workers * 2)
 
     aux = {}
@@ -159,6 +165,7 @@ def main():
     tmp = Path(tempfile.mkdtemp(prefix="tec_"))
     tmp_paths = {}
     n_ok = n_fail = 0
+    pool_broken = False
 
     with ProcessPoolExecutor(max_workers=args.workers) as ex:
         def submit(it, data, digest):
@@ -178,47 +185,58 @@ def main():
                 tmp_paths[digest] = path
             return ex.submit(process_file, path, it.name, a["nav"], a["p1p2"], a["p1c1"])
 
-        for k, job in enumerate(stream.run(items, submit), 1):
-            it, digest, size = job.item, job.digest, job.size
-            d = date_of(it.name)
-            try:
-                v, day = job.future.result()
-                day.update(dcb_file=aux[d]["dcb_file"], dcb_age_days=aux[d]["dcb_age_days"],
-                           p1c1_file=aux[d]["p1c1_file"] if day["p1_from_c1"] else None)
-                sta = day["station"]
-                sp = out_dir / "15min" / sta / f"{d.year}" / f"{sta}_{d.date()}.parquet"
-                sp.parent.mkdir(parents=True, exist_ok=True)
-                v.to_parquet(sp)
-                jp = out_dir / "daily" / sta / f"{d.date()}.json"
-                jp.parent.mkdir(parents=True, exist_ok=True)
-                jp.write_text(json.dumps(day, ensure_ascii=False, default=float), encoding="utf-8")
-                manifest.add(sha256=digest, name=it.name, size=size, status="ok", station=sta,
-                             date=day["date"], hours=day["hours_covered"], version=VERSION)
-                n_ok += 1
-                ok = True
-            except Exception as e:  # noqa: BLE001
-                manifest.add(sha256=digest, name=it.name, size=size, status="error", error=repr(e),
-                             version=VERSION)
-                print(f"  失敗 {it}: {e}")
-                n_fail += 1
-                ok = False
-            p = tmp_paths.pop(digest, None)
-            if p is not None:
-                p.unlink(missing_ok=True)
-            stream.done(job, ok)
-            if k % 50 == 0:
-                print(f"  已處理 {k} 個（收件匣共 {len(items)} 個；輔助資料 {len(aux)} 天）")
-    disposer.finish()
+        try:
+            for k, job in enumerate(stream.run(items, submit), 1):
+                it, digest, size = job.item, job.digest, job.size
+                d = date_of(it.name)
+                try:
+                    v, day = job.future.result()
+                    day.update(dcb_file=aux[d]["dcb_file"], dcb_age_days=aux[d]["dcb_age_days"],
+                               p1c1_file=aux[d]["p1c1_file"] if day["p1_from_c1"] else None)
+                    sta = day["station"]
+                    sp = out_dir / "15min" / sta / f"{d.year}" / f"{sta}_{d.date()}.parquet"
+                    sp.parent.mkdir(parents=True, exist_ok=True)
+                    v.to_parquet(sp)
+                    jp = out_dir / "daily" / sta / f"{d.date()}.json"
+                    jp.parent.mkdir(parents=True, exist_ok=True)
+                    jp.write_text(json.dumps(day, ensure_ascii=False, default=float), encoding="utf-8")
+                    manifest.add(sha256=digest, name=it.name, size=size, status="ok", station=sta,
+                                 date=day["date"], hours=day["hours_covered"], version=VERSION)
+                    n_ok += 1
+                    ok = True
+                except BrokenProcessPool:
+                    raise                      # 子程序被系統結束：不是這個檔案的問題，交給外層收尾
+                except Exception as e:  # noqa: BLE001
+                    manifest.add(sha256=digest, name=it.name, size=size, status="error", error=repr(e),
+                                 version=VERSION)
+                    print(f"  失敗 {it}: {e}")
+                    n_fail += 1
+                    ok = False
+                p = tmp_paths.pop(digest, None)
+                if p is not None:
+                    p.unlink(missing_ok=True)
+                stream.done(job, ok)
+                if k % 50 == 0:
+                    print(f"  已處理 {k} 個（收件匣共 {len(items)} 個；輔助資料 {len(aux)} 天）", flush=True)
+        except BrokenProcessPool:
+            pool_broken = True
+    disposer.finish()                          # 沒處置完的壓縮檔不會被刪（見 RawDisposer）
     shutil.rmtree(tmp, ignore_errors=True)
     if stream.n_dup:
         print(f"已處理過或重複（相同 SHA-256）：{stream.n_dup} 個，略過")
+    if stream.n_read_errors:
+        print(f"讀取失敗（壓縮檔成員損毀或檔案讀不到）：{stream.n_read_errors} 個，已記錄在 manifest，原始檔未刪")
     daily, _ = rebuild(out_dir)
-    print(f"完成：成功 {n_ok}、失敗 {n_fail}；刪除原始檔 {disposer.deleted}、保留 {disposer.kept}")
+    print(f"完成：成功 {n_ok}、失敗 {n_fail + stream.n_read_errors}；"
+          f"刪除原始檔 {disposer.deleted}、保留 {disposer.kept}")
     if daily is not None:
         s = daily.groupby("station").agg(days=("date", "size"), first=("date", "min"), last=("date", "max"),
                                          hours=("hours_covered", "mean"), bias_resid=("rx_bias_resid_tecu", "median"),
                                          p1_from_c1=("p1_from_c1", "mean"), vtec_mean=("vtec_mean", "mean"))
         print(s.round(2).to_string())
+    if pool_broken:
+        print(POOL_BROKEN_MSG)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

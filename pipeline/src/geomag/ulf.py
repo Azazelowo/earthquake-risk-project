@@ -97,7 +97,10 @@ def daily_summary(df, date):
     day = df[(df.index >= d) & (df.index < d + pd.Timedelta(days=1))]
     h = np.sqrt(day["X"] ** 2 + day["Y"] ** 2)
     out = {
+        # coverage 以 Z 分量計（ULF 特徵需要向量分量）；coverage_f 以總磁場 F 計。
+        # 只記錄 F 的純量磁力儀測站（2026-11 實測：HLN、TTN）會是 coverage = 0、coverage_f ≈ 1。
         "date": d, "coverage": float(day["Z"].notna().sum() / 86400.0),
+        "coverage_f": float(day["F"].notna().sum() / 86400.0),
         "h_mean": float(h.mean()), "z_mean": float(day["Z"].mean()), "f_mean": float(day["F"].mean()),
         "h_std": float(h.std()), "z_std": float(day["Z"].std()),
     }

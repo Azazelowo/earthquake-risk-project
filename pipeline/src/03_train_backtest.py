@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from eqforecast import metrics as M  # noqa: E402
 from eqforecast.config import Config  # noqa: E402
 from eqforecast.decluster import decluster, interevent_stats  # noqa: E402
-from eqforecast.features import catalog_features, external_features  # noqa: E402
+from eqforecast.features import catalog_features, event_min_ml, external_features  # noqa: E402
 from eqforecast.grid import Grid  # noqa: E402
 from eqforecast.models import ColumnScore, LogisticModel, RandomModel  # noqa: E402
 from eqforecast.report import write_report  # noqa: E402
@@ -174,7 +174,12 @@ def main():
     print("切分（發布次數）：", pd.Series(split_per_t0).value_counts().to_dict())
 
     # ---------- 4. 特徵 ----------
-    feat_events = events[events["ml"] >= cfg.feature_min_ml]
+    min_ml = event_min_ml(events["time"], cfg.feature_min_ml, cfg.feature_min_ml_by_year, BASE_DIR)
+    feat_events = events[events["ml"].to_numpy() >= min_ml]
+    if cfg.feature_min_ml_by_year:
+        print(f"特徵門檻隨年份變動（{cfg.feature_min_ml_by_year}）：ML {min_ml.min():.1f}～{min_ml.max():.1f}，"
+              f"特徵事件 {len(feat_events)} 筆（固定 ML≥{cfg.feature_min_ml} 時 "
+              f"{int((events['ml'] >= cfg.feature_min_ml).sum())} 筆）")
     feats = catalog_features(feat_events, grid.cell_of(feat_events["lat"], feat_events["lon"]),
                              t0s, grid, cfg.feature_min_ml)
     catalog_cols = [c for c in feats.columns if c.startswith("f_")]

@@ -16,6 +16,7 @@
   "decluster_fs_time_prop": 0.1,
   "decluster_min_ml": 3.0,
   "feature_min_ml": 3.0,
+  "feature_min_ml_by_year": "pipeline/configs/feature_min_ml_by_year.csv",
   "splits": {
     "train": [
       "1991-01-01",

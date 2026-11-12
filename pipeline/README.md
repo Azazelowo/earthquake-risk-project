@@ -7,14 +7,15 @@ flowchart LR
     subgraph Input
         R1["CWA XML／GDMS CSV<br/>地震目錄"]
         R2["GFZ Kp／OMNI2 Dst<br/>太空天氣"]
-        R3["RINEX 觀測檔<br/>（NDH5 等）"]
-        R4["地磁／TEC<br/>（申請中）"]
+        R3["GDMS GNSS<br/>RINEX 觀測檔"]
+        R4["GDMS MAGNET<br/>IAGA-2002 1 秒"]
     end
     R1 --> S1["01_build_catalog<br/>events.parquet"]
     R2 --> S0["00_download_space_weather<br/>space_weather_*.parquet"]
-    R3 --> TEC["gnss_tec<br/>RINEX → VTEC"]
-    R4 --> S2["02_clean_features（B2）<br/>網格 × 日 前兆特徵"]
-    TEC -.-> S2
+    R3 --> TEC["11_process_gnss_tec<br/>每站 15 分鐘 VTEC"]
+    R4 --> MAG["10_process_magnet<br/>每站每日 ULF"]
+    MAG --> S2["02_clean_features（B2）<br/>網格 × 日 前兆特徵"]
+    TEC --> S2
     S0 -. 控制變數 .-> S2
     S1 --> S3["03_train_backtest（B3）<br/>去群聚・目標・切分・模型・POD/FAR/CSI"]
     S2 -. external_features .-> S3
@@ -45,10 +46,17 @@ $env:EQ_DATA_DIR = "C:\path\to\破專題"
 
 python pipeline\src\00_download_space_weather.py   # Kp、Dst 等（約 5 分鐘，之後可加 --offline）
 python pipeline\src\01_build_catalog.py
-python pipeline\src\02_clean_features.py           # 沒有前兆資料時會直接報錯（B2，資料到齊後再做）
+python pipeline\src\10_process_magnet.py --inbox <下載資料夾> --delete-raw     # B2：地磁
+python pipeline\src\11_process_gnss_tec.py --inbox <下載資料夾> --delete-raw   # B2：TEC
+python pipeline\src\12_quality_report.py           # B2：資料品質報告（涵蓋率、缺口、失敗檔案、換儀器）
+python pipeline\src\02_clean_features.py           # B2：網格 × 日 前兆特徵
+python pipeline\src\03_train_backtest.py --config pipeline\configs\b3_precursor.json   # 目錄 vs 目錄＋前兆
+python pipeline\src\04_estimate_mc.py              # 分段 Mc → configs\feature_min_ml_by_year.csv（需 EQ_DATA_DIR）
+python pipeline\src\03_train_backtest.py --config pipeline\configs\b3_ml3fixed.json   # 對照：舊作法，全期間固定 ML≥3
+python pipeline\src\05_compare_runs.py --base ml3fixed --runs baseline mc35   # 配對比較兩次回測
 python pipeline\src\03_train_backtest.py --sanity-check
 python pipeline\src\03_train_backtest.py --config pipeline\configs\b3_cell0p5.json
-python pipeline\src\case_ndh5_tec.py --download    # NDH5 TEC 個案
+python pipeline\src\case_ndh5_tec.py --download --rinex-dir E:\123\GNSS_ETEC    # NDH5 TEC 個案
 
 python -m unittest discover -s pipeline\tests -v   # 單元測試（合成資料，不需要本機資料）
 ```
@@ -59,7 +67,12 @@ python -m unittest discover -s pipeline\tests -v   # 單元測試（合成資料
 |---|---|---|---|
 | `00_download_space_weather.py` | 網路：GFZ Kp、NASA OMNI2 | `space_weather_hourly.parquet`、`space_weather_daily.parquet`；原始檔在 `地震預測/太空天氣指數/raw/` | Kp、ap、Ap、Dst、AE、F10.7、SN、IMF Bz；每日磁暴旗標。是**控制變數**，不是前兆 |
 | `01_build_catalog.py` | `E-A0073-002/*.xml`、`earthquake_data/raw/GDMS地震目錄_*.csv` | `events.parquet`、`catalog/event_matches.parquet` | 統一轉成 UTC、Mc=2.0、來源內去重、CWA XML × GDMS 跨來源比對（見下方說明）、標記特徵事件與目標事件（見下表） |
-| `02_clean_features.py` | `地震預測/地磁及地電流/*.csv`、`地震預測/電離層電子密度變化/*.csv` | `features.parquet` | 0.2° 網格 × 日。**B2，資料到齊後改寫** |
+| `10_process_magnet.py` | 收件匣（GDMS MAGNET 日檔 `.sec`、資料夾或 zip） | `magnet/magnet_daily.parquet`、`magnet/minute/`、`manifest.jsonl` | 88888／99999 → 缺值、F 由 XYZ 計算；1 分鐘平均；夜間（台灣 00–04 時）ULF Sz、Sh、Sz/Sh。處理完可刪原始檔 |
+| `11_process_gnss_tec.py` | 收件匣（GDMS GNSS `.YYo(.gz)`）；網路：BKG 星曆、CODE 每月 DCB | `tec/tec_15min.parquet`、`tec/tec_daily.parquet`、`manifest.jsonl` | 每站 15 分鐘 VTEC；記錄儀器識別、DCB 來源與距今天數。多核心平行 |
+| `12_quality_report.py` | `magnet/`、`tec/` 的 `manifest.jsonl` 與 `daily/*.json` | `docs/reports/b2_data_quality/`（README 與 CSV） | 每站每年可用率、需補抓的站年（附備選站）、≥ 7 天缺口、失敗檔案與原因、DCB 沿用天數、儀器更換日。不需原始檔與網路 |
+| `02_clean_features.py` | 上面兩者的輸出、`space_weather_daily.parquet` | `features_magnet.parquet`、`features_tec.parquet`、`station_anomalies.parquet` | 0.2° 網格 × 日。背景只用過去的寧靜日；換儀器不跨段；地磁取 150 km 內、TEC 取 300 km 內最近測站 |
+| `04_estimate_mc.py` | GDMS 原始目錄（不先刪 ML<2） | `docs/reports/catalog_mc/`、`pipeline/configs/feature_min_ml_by_year.csv` | 每「年 × 區」的完備規模（MAXC+0.2、GFT90），事件不足時往前併年；第 Y 年的特徵門檻只用 Y−1 以前的資料，不低於 3.0（FR-B2-20） |
+| `05_compare_runs.py` | `b3_<tag>/predictions.parquet`、`targets.parquet` | Markdown | 兩次以上回測（只改特徵）的配對比較：ΔASS 信賴區間、各 τ 的 McNemar |
 | `03_train_backtest.py` | `events.parquet`、設定檔 `pipeline/configs/*.json` | `b3_<tag>/`（預測、目標、特徵、`metrics.json`） | **B3 基準模型**：去群聚、目標定義、時間切分、POD／FAR／CSI。報告在 `docs/reports/b3_<tag>/` |
 | `case_ndh5_tec.py` | `地震預測/測地法/GNSS_ETEC/*.24o`；下載廣播星曆與 DCB 到 `地震預測/測地法/aux/` | `tec/ndh5_vtec_15min.parquet`（與 `.csv`） | 2024 花蓮地震的單一個案展示。報告在 `docs/reports/case_ndh5_2024hualien/` |
 
@@ -104,6 +117,8 @@ python -m unittest discover -s pipeline\tests -v   # 單元測試（合成資料
 
 ## 已知限制
 
-- `02_clean_features.py` 的權重與 `CASCADE_K` 都是暫定值；B2 會改寫成只產出「網格 × 日」特徵，權重交給 B3 學。
+- B2 前兆特徵只有 2018 年之後，`b3_precursor.json` 因此把訓練／驗證／測試都放在 2018–2026 內；主震約 38 筆，信賴區間很寬。
+- TEC 的衛星 DCB 用 CODE 每月值（與 CAS 每日值相差約 0.3 ns）；接收機偏差逐日估計，同站逐日波動約 2 TECU。
+- 地磁沒有儀器更換紀錄可查，只能從資料涵蓋率與數值跳動判斷。下載清單與處理步驟見 [docs/b2_download_plan/](../docs/b2_download_plan/README.md)。
 - `gnss_tec` 只處理 GPS（不含 GLONASS），接收機偏差用最小標準差法估計。
 - 去群聚參數、網格大小、深度門檻都會影響結果，敏感度見 `docs/reports/b3_cell0p5/`、`docs/reports/b3_shallow40/`。

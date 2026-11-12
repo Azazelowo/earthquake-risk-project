@@ -34,6 +34,11 @@ def read_obs_header(f):
             header["interval"] = float(line[:10])
         elif label == "REC # / TYPE / VERS":
             header["receiver"] = line[20:40].strip()
+            header["receiver_sn"] = line[0:20].strip()
+            header["receiver_fw"] = line[40:60].strip()
+        elif label == "ANT # / TYPE":
+            header["antenna_sn"] = line[0:20].strip()
+            header["antenna"] = line[20:40].strip()
         elif label == "TIME OF FIRST OBS":
             header["time_system"] = line[48:51].strip() or "GPS"
         elif label == "END OF HEADER":
@@ -111,6 +116,64 @@ NAV_FIELDS = [
 def _d(s):
     s = s.strip().replace("D", "E").replace("d", "e")
     return float(s) if s else np.nan
+
+
+def nav_version(path):
+    with _open(path) as f:
+        first = f.readline()
+    try:
+        return float(first[:9])
+    except ValueError:
+        return 2.0
+
+
+def read_nav(path):
+    """依版本讀 GPS 廣播星曆：RINEX 2（brdcDDD0.YYn）或 RINEX 3（BRDC00WRD_R_..._MN.rnx 混合檔）。"""
+    return read_gps_nav3(path) if nav_version(path) >= 3 else read_gps_nav(path)
+
+
+def read_gps_nav3(path):
+    """讀 RINEX 3 混合星曆中的 GPS 紀錄。
+
+    RINEX 3：第一列 'Gnn yyyy mm dd hh mm ss' + 3 個 D19.12；續行開頭 4 個空白、每列 4 個 19 字元欄位。
+    各系統的續行數不同（GLONASS／SBAS 較少，3.05 版又多一列），所以用「開頭是否為字母」切分紀錄，
+    只保留 GPS（G）。
+    """
+    recs = []
+    with _open(path) as f:
+        for line in f:
+            if "END OF HEADER" in line:
+                break
+        block = []
+        for raw in f:
+            line = raw.rstrip("\n")
+            if not line.strip():
+                continue
+            if line[0] != " ":
+                if block:
+                    recs.append(block)
+                block = [line.ljust(80)]
+            elif block:
+                block.append(line.ljust(80))
+        if block:
+            recs.append(block)
+    out = []
+    for b in recs:
+        l0 = b[0]
+        if l0[0] != "G" or len(b) < 8:
+            continue
+        rec = {
+            "sv": f"G{int(l0[1:3]):02d}",
+            "toc": pd.Timestamp(year=int(l0[4:8]), month=int(l0[9:11]), day=int(l0[12:14]),
+                                hour=int(l0[15:17]), minute=int(l0[18:20]), second=int(l0[21:23])),
+            "af0": _d(l0[23:42]), "af1": _d(l0[42:61]), "af2": _d(l0[61:80]),
+        }
+        for j, names in enumerate(NAV_FIELDS, start=1):
+            l = b[j]
+            for i, name in enumerate(names):
+                rec[name] = _d(l[4 + 19 * i: 4 + 19 * (i + 1)])
+        out.append(rec)
+    return pd.DataFrame(out)
 
 
 def read_gps_nav(path):

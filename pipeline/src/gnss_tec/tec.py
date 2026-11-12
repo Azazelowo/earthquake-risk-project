@@ -27,6 +27,22 @@ K_TECU_PER_M = F1 ** 2 * F2 ** 2 / (40.3 * (F1 ** 2 - F2 ** 2)) / 1e16
 NS_TO_TECU = C * 1e-9 * K_TECU_PER_M     # 1 ns 的碼偏差 ≈ 2.85 TECU
 
 
+def fill_p1_from_c1(obs, p1c1_ns, min_p1_frac=0.5):
+    """接收機只記錄 C1（L1 民用碼）時，用衛星 P1−C1 偏差換算：P1 = C1 + B(P1−C1)。
+
+    回傳 (obs, 是否換算)。P1 已有一半以上的觀測時不動。沒有 P1−C1 值的衛星，P1 保持缺值。
+    """
+    has_p1 = "P1" in obs and obs["P1"].notna().mean() >= min_p1_frac
+    if has_p1 or "C1" not in obs:
+        return obs, False
+    obs = obs.copy()
+    b_m = obs["sv"].map(p1c1_ns).astype(float) * C * 1e-9
+    obs["P1"] = obs["C1"] + b_m
+    if "C1_lli" in obs:
+        obs["P1_lli"] = obs["C1_lli"]
+    return obs, True
+
+
 def slant_tec(obs, nav, rx_xyz, el_mask_deg=10.0, shell_km=350.0, max_gap_s=90.0,
               slip_tecu=1.5, min_arc_epochs=20):
     """回傳每顆衛星每個 epoch 的幾何與 STEC（尚未修正 DCB）。"""

@@ -1,8 +1,9 @@
 """特徵。
 
 1. 地震目錄特徵（catalog features）—— B3 基準模型只用這一類
-   全部只用發布時間 t0 之前的事件（time < t0），而且只用 ML >= feature_min_ml（預設 3.0），
-   因為 1990 年代的完備規模約 2.25，用 3.0 才能讓各年代的計數可以比較。
+   全部只用發布時間 t0 之前的事件（time < t0），而且只用 ML >= 門檻。門檻預設全期間 3.0；
+   B3 設定檔從 2026-11-10 起用 feature_min_ml_by_year（04_estimate_mc.py 的分段 Mc，FR-B2-20），
+   每個事件用它那一年的門檻（不低於 3.0），Mc 較高的年份（1990–91、2009–12）門檻會往上調。
 
    為什麼用「占全區比例」而不是絕對次數：
        通過 Gap<=110 的 ML>=3 事件數，從 1990 年代每年約 300 筆增加到 2020 年代每年 1,000 筆以上，
@@ -45,6 +46,26 @@ def _log_share(count, n_cells):
     """同一發布時間點內，該格占全區的比例（取 log10，加小常數避免 log 0）。"""
     total = count.sum(axis=1, keepdims=True)
     return np.log10((count + 0.1) / (total + 0.1 * n_cells))
+
+
+def event_min_ml(times, floor, table_path=None, base_dir=None):
+    """每個事件適用的特徵門檻。table_path 為 None 時全部是 floor。
+
+    表格（04_estimate_mc.py 產生）每年一個門檻；表格之前的年份用第一年、之後的年份用最後一年。
+    門檻不會低於 floor。
+    """
+    years = pd.to_datetime(pd.Series(times)).dt.year.to_numpy()
+    if not table_path:
+        return np.full(len(years), float(floor))
+    from pathlib import Path
+    p = Path(table_path)
+    if not p.is_absolute() and base_dir is not None:
+        p = Path(base_dir) / p
+    tab = pd.read_csv(p).sort_values("year")
+    y = tab["year"].to_numpy(int)
+    thr = tab["threshold"].to_numpy(float)
+    idx = np.clip(np.searchsorted(y, years, side="right") - 1, 0, len(y) - 1)
+    return np.maximum(thr[idx], float(floor))
 
 
 def catalog_features(events, cell_ids, t0s, grid, min_ml=3.0):
@@ -154,10 +175,15 @@ def external_features(spec, t0s, grid, base_dir=None):
         "t0": np.repeat(t0s.to_numpy(), grid.n_cells),
         "cell_id": np.tile(np.arange(grid.n_cells), len(t0s)),
     })
+    cov = f"f_{spec.name}_coverage"
     if not parts:
+        # 前兆資料和所有發布時間都不重疊：欄位照樣給（全缺值、覆蓋率 0），下游才不會因少欄位而失敗
+        for c in cols:
+            for a in spec.aggs:
+                skeleton[f"f_{spec.name}_{c}_{a}"] = np.nan
+        skeleton[cov] = 0.0
         return skeleton
     feats = pd.concat(parts, ignore_index=True)
     out = skeleton.merge(feats, on=["t0", "cell_id"], how="left")
-    cov = f"f_{spec.name}_coverage"
     out[cov] = out[cov].fillna(0.0)   # 覆蓋率 0 是已知事實（沒有資料），不是缺值
     return out

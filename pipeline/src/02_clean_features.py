@@ -1,223 +1,365 @@
+"""B2 第六步：把測站的地磁與 TEC 資料轉成「0.2° 網格 × 日」的前兆特徵，接到 B3。
+
+輸入（由 10_、11_ 兩支程式產生）：
+    pipeline/data/magnet/magnet_daily.parquet    每站每日：夜間 ULF Sz、Sh、Sz/Sh、資料涵蓋率
+    pipeline/data/tec/tec_15min.parquet          每站 15 分鐘垂直 TEC
+    pipeline/data/space_weather_daily.parquet    （選用）00_download_space_weather.py 的擾動日旗標
+
+步驟：
+1. 測站層級的異常指標，背景值只用「當天之前」的資料（不偷看未來）：
+   背景 = 前 30 天內「最近的 15 個寧靜日」（至少 10 天）。2018–2026 跨過太陽極大期，
+   擾動日占 39%，若硬取「前 15 天」常湊不滿 10 天，所以把搜尋範圍放寬到 30 天。
+   地磁（每站每日）
+       mag_pol_z    log10(Sz/Sh) 相對背景的穩健 z 值（中位數、1.4826 × MAD）
+       mag_sz_z     log10(Sz) 的穩健 z 值
+       mag_szref_z  log10(Sz / 參考站 Sz) 的穩健 z 值。參考站預設金門 KMN（距台灣本島 > 200 km），
+                    用來扣掉磁層、太陽風造成的全區共同變化（梯度法）
+                    ※ KMN 實際只有 103 天可用（2018–2020），此欄幾乎全缺；保留作對照，
+                      實際扣除共同擾動改用下面兩欄。
+       mag_sznet_z  log10(Sz) − 當天「其他測站」log10(Sz) 中位數（不含自己，至少 2 站）的穩健 z 值。
+                    限制：只能凸顯單站附近的異常；涵蓋全台的訊號會被當成共同擾動一起扣掉。
+       mag_szres_z  log10(Sz) 扣掉「由 Kp 日總和、Dst 日最小值線性預期的值」後的殘差之穩健 z 值。
+                    迴歸每天重新擬合，只用當天之前 365 天內的非磁暴日（至少 60 天）。
+                    不依賴其他測站，可補測站少的時期；但全球指數只能解釋部分本地擾動。
+   TEC（每站每 15 分鐘 → 每日）
+       背景：背景日同一時刻的中位數 ± 1.5 IQR（和 case_ndh5_tec.py 相同）
+       tec_pos_frac / tec_neg_frac   當天高於上界／低於下界的時間比例
+       tec_dmax / tec_dmin           當天 ΔVTEC（觀測 − 背景中位數）的最大值、最小值，TECU
+   背景至少要 10 天；不足時該日特徵為缺值。
+2. 太空天氣（有 space_weather_daily.parquet 時）：
+   擾動日（Kp ≥ 4 或 Dst ≤ −30 nT）不當背景；磁暴日（Kp ≥ 5 或 Dst ≤ −50 nT）當天特徵設為缺值。
+   一般擾動日仍出特徵：全區共同的擾動另由 mag_sznet_z（測站網中位數）、mag_szres_z（指數迴歸殘差）扣除。
+   --keep-disturbed 可全部關掉。
+3. 對應到網格：每個網格中心取「當天有資料、距離最近」的測站。
+   地磁 ULF 訊號衰減快，限 150 km 內；TEC 是電離層 350 km 高的量，空間尺度大，限 300 km 內。
+   超過距離的網格不給值（缺值），不補 0。
+輸出：
+    pipeline/data/features_magnet.parquet   lat_bin、lon_bin、time_bin、mag_*、mag_station、mag_dist_km
+    pipeline/data/features_tec.parquet      lat_bin、lon_bin、time_bin、tec_*、tec_station、tec_dist_km
+    pipeline/data/station_anomalies.parquet 測站層級的指標（報告與檢查用）
+地磁與 TEC 分開兩個檔：B3 以「某網格有幾天有資料」計算覆蓋率，放同一檔會互相灌水。
+"""
 import argparse
-import os
+import json
 import sys
-from glob import glob
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-# ========== Configuration ==========
-GRID_SIZE = 0.2  # degrees
-TIME_AGG = '1D'  # daily aggregation; can be '1H' for hourly
-BASE_DIR = os.path.join(os.path.dirname(__file__), '..', '..')
-DATA_DIR = os.environ.get('EQ_DATA_DIR', BASE_DIR)  # raw data may live outside git
-RANDOM_SEED = 42  # only used by --demo
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from eqforecast.decluster import haversine_km  # noqa: E402
 
-# 前兆範圍：只用地震電磁學相關資料（2026-11-02 決定）。
-# GNSS 在本專題是用來推算電離層 TEC，不是地殼形變；RINEX（.24o）要先轉成 CSV 才能讀取。
-PRECURSOR_FOLDERS = {
-    'geomagnetic': os.path.join(DATA_DIR, '地震預測', '地磁及地電流'),
-    'tec': os.path.join(DATA_DIR, '地震預測', '電離層電子密度變化'),
-}
-# Placeholder weights: equal until calibrated by backtest
-WEIGHTS = {
-    'geomagnetic': 0.5,
-    'tec': 0.5,
-}
-# Placeholder: 0.658 could not be reproduced from events.parquet (Weibull k ≈ 0.41–0.54).
-# The multiplication in apply_weights() has no validated basis; review before use.
-CASCADE_K = 0.658
+BASE_DIR = Path(__file__).resolve().parents[2]
+DATA = BASE_DIR / "pipeline" / "data"
+CONFIG = BASE_DIR / "pipeline" / "configs" / "b3_baseline.json"
 
-def load_precursor(folder_path, var_name):
-    """Load all CSV files in folder, concatenate, ensure columns: lat, lon, time, value."""
-    if not os.path.isdir(folder_path):
-        print(f"Folder not found: {folder_path}")
-        return pd.DataFrame()
-    files = glob(os.path.join(folder_path, '*.csv'))
-    if not files:
-        print(f"No CSV files found in {folder_path}")
-        return pd.DataFrame()
-    dfs = []
-    for f in files:
-        try:
-            df = pd.read_csv(f)
-        except Exception as e:
-            print(f"Failed to read {f}: {e}")
+GRID_DEG = 0.2
+BG_SEARCH_DAYS = 30          # 往回找背景日的範圍
+BG_DAYS = 15                 # 取最近的幾個寧靜日
+MIN_BG_DAYS = 10
+IQR_K = 1.5
+MIN_MAG_COVERAGE = 0.9        # 當天 1 秒資料涵蓋率低於此值，不當背景、也不出特徵
+MIN_TEC_HOURS = 20.0          # 當天 TEC 少於 20 小時，同上
+MAG_RADIUS_KM = 150.0
+TEC_RADIUS_KM = 300.0
+MAG_REF = "KMN"
+MIN_NET_STATIONS = 2          # 測站網中位數：當天至少要有幾個「其他測站」
+REG_COLS = ["kp_sum", "dst_min"]   # 指數迴歸的自變數（space_weather_daily.parquet 的欄位）
+REG_WINDOW_DAYS = 365         # 迴歸只用當天之前這麼多天
+REG_MIN_DAYS = 60             # 訓練日至少要這麼多天
+MAG_COLS = ["mag_pol_z", "mag_sz_z", "mag_szref_z", "mag_sznet_z", "mag_szres_z"]
+TEC_COLS = ["tec_pos_frac", "tec_neg_frac", "tec_dmax", "tec_dmin"]
+
+
+def background_days(dates, bg_ok, i, search=BG_SEARCH_DAYS, n=BG_DAYS):
+    """第 i 天的背景日：之前 search 天內、bg_ok 為真的日子中最近的 n 天（布林遮罩）。"""
+    t = dates
+    m = (t >= t[i] - pd.Timedelta(days=search)) & (t < t[i]) & bg_ok
+    idx = np.flatnonzero(m)[-n:]
+    out = np.zeros(len(t), bool)
+    out[idx] = True
+    return out
+
+
+def robust_z(values, dates, bg_ok, out_ok, min_bg=MIN_BG_DAYS):
+    """穩健 z 值。背景只用過去、bg_ok 的日子；out_ok 為假的日子不出值。"""
+    order = np.argsort(pd.DatetimeIndex(dates))
+    t = pd.DatetimeIndex(dates)[order]
+    v = np.asarray(values, float)[order]
+    bg_ok = np.asarray(bg_ok, bool)[order] & ~np.isnan(v)
+    out_ok = np.asarray(out_ok, bool)[order]
+    out = np.full(len(t), np.nan)
+    for i in range(len(t)):
+        if not out_ok[i] or np.isnan(v[i]):
             continue
-        # Expect columns: latitude, longitude, timestamp, value (adjust as needed)
-        # Standardize column names
-        cols = {c.lower().strip(): c for c in df.columns}
-        # Try to map
-        lat_col = cols.get('latitude') or cols.get('lat') or cols.get('latitude (°)') or None
-        lon_col = cols.get('longitude') or cols.get('lon') or cols.get('longitude (°)') or None
-        time_col = cols.get('time') or cols.get('timestamp') or cols.get('date') or cols.get('datetime') or None
-        val_col = cols.get('value') or cols.get('measurement') or cols.get('observation') or cols.get('value') or None
-        if not all([lat_col, lon_col, time_col, val_col]):
-            print(f"Could not identify required columns in {f}. Columns: {df.columns.tolist()}")
+        bg = v[background_days(t, bg_ok, i)]
+        if len(bg) < min_bg:
             continue
-        df = df.rename(columns={lat_col: 'latitude', lon_col: 'longitude', time_col: 'time', val_col: 'value'})
-        df['time'] = pd.to_datetime(df['time'], errors='coerce')
-        df = df.dropna(subset=['latitude', 'longitude', 'time', 'value'])
-        df['var'] = var_name
-        dfs.append(df[['latitude', 'longitude', 'time', 'value', 'var']])
-    if not dfs:
-        return pd.DataFrame()
-    return pd.concat(dfs, ignore_index=True)
+        med = np.median(bg)
+        mad = 1.4826 * np.median(np.abs(bg - med))
+        if mad > 0:
+            out[i] = (v[i] - med) / mad
+    return pd.Series(out, index=t)
 
-def spatial_temporal_bin(df):
-    """Bin data into 0.2° grid and daily intervals."""
-    if df.empty:
-        return df
-    df['lat_bin'] = (df['latitude'] // GRID_SIZE) * GRID_SIZE
-    df['lon_bin'] = (df['longitude'] // GRID_SIZE) * GRID_SIZE
-    df['time_bin'] = df['time'].dt.floor(TIME_AGG)
-    # Aggregate: mean value per bin
-    binned = df.groupby(['lat_bin', 'lon_bin', 'time_bin', 'var'])['value'].mean().reset_index()
-    binned.rename(columns={'value': 'value_mean'}, inplace=True)
-    return binned
 
-def sliding_stats(df_bin, window=3):
-    """Compute rolling mean and std per grid cell over time."""
-    if df_bin.empty:
-        return df_bin
-    # Sort
-    df_bin = df_bin.sort_values(['lat_bin', 'lon_bin', 'time_bin'])
-    # Group by grid cell
-    grouped = df_bin.groupby(['lat_bin', 'lon_bin'])
-    def rolling_stats(g):
-        g = g.set_index('time_bin').sort_index()
-        # Ensure regular frequency? We'll just roll on index
-        g['rolling_mean'] = g['value_mean'].rolling(window=window, min_periods=1).mean()
-        g['rolling_std'] = g['value_mean'].rolling(window=window, min_periods=1).std().fillna(0)
-        return g.reset_index()
-    stats = grouped.apply(rolling_stats).reset_index(drop=True)
-    return stats
+def network_reference(mag, min_others=MIN_NET_STATIONS):
+    """每個站日的「其他測站當天 log_sz 中位數」（不含自己）。
 
-def denoise_iqr(df_stats):
-    """Remove outliers using ±1.5 IQR per grid cell."""
-    if df_stats.empty:
-        return df_stats
-    def iqr_filter(g):
-        q1 = g['value_mean'].quantile(0.25)
-        q3 = g['value_mean'].quantile(0.75)
-        iqr = q3 - q1
-        lower = q1 - 1.5 * iqr
-        upper = q3 + 1.5 * iqr
-        return g[(g['value_mean'] >= lower) & (g['value_mean'] <= upper)]
-    filtered = df_stats.groupby(['lat_bin', 'lon_bin']).apply(iqr_filter).reset_index(drop=True)
-    return filtered
+    只採計當天涵蓋率合格、log_sz 有值的測站；其他測站少於 min_others 個時回傳缺值。
+    只用同一天的資料，不涉及未來。
+    """
+    ok = (mag["coverage"] >= MIN_MAG_COVERAGE) & np.isfinite(mag["log_sz"])
+    tab = (mag[ok].drop_duplicates(["date", "station"])
+           .pivot(index="date", columns="station", values="log_sz"))
+    ref = {}
+    for sta in mag["station"].unique():
+        others = tab.drop(columns=[sta], errors="ignore")
+        med = others.median(axis=1, skipna=True)
+        ref[sta] = med.where(others.notna().sum(axis=1) >= min_others)
+    keys = pd.MultiIndex.from_arrays([mag["station"], mag["date"]])
+    if not ref:
+        return np.full(len(mag), np.nan)
+    stacked = pd.concat(ref, names=["station", "date"])
+    return stacked.reindex(keys).to_numpy(float)
 
-def combine_features(feature_dfs):
-    """Merge multiple precursor features into a single DataFrame with columns per precursor."""
-    if not feature_dfs:
-        return pd.DataFrame()
-    # Start with first
-    combined = feature_dfs[0].copy()
-    # Rename value columns to precursor name
-    for i, (var_name, df) in enumerate(zip(PRECURSOR_FOLDERS.keys(), feature_dfs)):
-        if i == 0:
-            df_renamed = df.rename(columns={'value_mean': var_name,
-                                            'rolling_mean': f'{var_name}_rolling_mean',
-                                            'rolling_std': f'{var_name}_rolling_std'})
-            combined = df_renamed[['lat_bin', 'lon_bin', 'time_bin', var_name,
-                                   f'{var_name}_rolling_mean', f'{var_name}_rolling_std']]
+
+def index_residual(y, dates, X, fit_ok, window=REG_WINDOW_DAYS, min_fit=REG_MIN_DAYS):
+    """log_sz 扣掉「由地磁指數預期的值」後的殘差。
+
+    每一天各自擬合一次線性迴歸 y ~ 1 + X，訓練資料只取「當天之前 window 天內、fit_ok 為真」
+    的日子（不偷看未來）。訓練日不足 min_fit 天，或當天指數缺值時回傳缺值。
+    """
+    t = pd.DatetimeIndex(dates)
+    y = np.asarray(y, float)
+    X = np.asarray(X, float).reshape(len(y), -1)
+    usable = np.asarray(fit_ok, bool) & np.isfinite(y) & np.isfinite(X).all(axis=1)
+    A = np.column_stack([np.ones(len(y)), X])
+    out = np.full(len(y), np.nan)
+    for i in range(len(y)):
+        if not (np.isfinite(y[i]) and np.isfinite(X[i]).all()):
+            continue
+        m = usable & (t < t[i]) & (t >= t[i] - pd.Timedelta(days=window))
+        if m.sum() < min_fit:
+            continue
+        coef, *_ = np.linalg.lstsq(A[m], y[m], rcond=None)
+        out[i] = y[i] - A[i] @ coef
+    return out
+
+
+def magnet_station_features(mag, disturbed, storms, ref=MAG_REF, indices=None):
+    """indices：以日期為索引、含 REG_COLS 欄位的每日地磁指數表；沒有時 mag_szres_z 全為缺值。"""
+    mag = mag.copy()
+    mag["date"] = pd.to_datetime(mag["date"]).dt.normalize()
+    mag["log_pol"] = np.log10(mag["ulf_pol"])
+    mag["log_sz"] = np.log10(mag["ulf_sz"])
+    ref_sz = mag[mag["station"] == ref].set_index("date")["log_sz"]
+    mag["log_szref"] = mag["log_sz"] - mag["date"].map(ref_sz)
+    mag["log_sznet"] = mag["log_sz"] - network_reference(mag)
+    good = mag["coverage"] >= MIN_MAG_COVERAGE
+    mag["bg_ok"] = good & ~mag["date"].isin(disturbed)
+    mag["out_ok"] = good & ~mag["date"].isin(storms)
+    rows = []
+    for sta, g in mag.sort_values("date").groupby("station"):
+        g = g.drop_duplicates("date").set_index("date")
+        if indices is not None:
+            # 磁暴日當天不出特徵，也不拿來擬合；一般擾動日要留著，否則學不到指數與功率的關係
+            g["log_szres"] = index_residual(g["log_sz"].to_numpy(float), g.index,
+                                            indices.reindex(g.index)[REG_COLS].to_numpy(float),
+                                            g["out_ok"].to_numpy())
         else:
-            df_renamed = df.rename(columns={'value_mean': var_name,
-                                            'rolling_mean': f'{var_name}_rolling_mean',
-                                            'rolling_std': f'{var_name}_rolling_std'})
-            # Merge on grid and time
-            combined = pd.merge(combined,
-                                df_renamed[['lat_bin', 'lon_bin', 'time_bin', var_name,
-                                            f'{var_name}_rolling_mean', f'{var_name}_rolling_std']],
-                                on=['lat_bin', 'lon_bin', 'time_bin'],
-                                how='outer')
-    return combined
+            g["log_szres"] = np.nan
+        out = pd.DataFrame(index=g.index)
+        out["station"] = sta
+        out["lat"], out["lon"] = g["lat"], g["lon"]
+        for src, col in (("log_pol", "mag_pol_z"), ("log_sz", "mag_sz_z"), ("log_szref", "mag_szref_z"),
+                         ("log_sznet", "mag_sznet_z"), ("log_szres", "mag_szres_z")):
+            z = robust_z(g[src].to_numpy(float), g.index, g["bg_ok"].to_numpy(), g["out_ok"].to_numpy())
+            out[col] = z.reindex(g.index).to_numpy()
+        if sta == ref:
+            out["mag_szref_z"] = np.nan          # 參考站對自己的比值沒有意義
+        rows.append(out.reset_index())
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
 
-def apply_weights(df_features):
-    """Apply placeholder weights and cascading factor to compute risk index (0-100)."""
-    if df_features.empty:
-        return df_features
-    # Compute weighted sum of normalized features (0-1 per feature)
-    weighted_sum = 0
-    total_weight = 0
-    for var, w in WEIGHTS.items():
-        if var in df_features.columns:
-            # Min-max normalize per column (handle NaN)
-            col = df_features[var]
-            if col.notna().any():
-                col_norm = (col - col.min()) / (col.max() - col.min() + 1e-9)
-                weighted_sum += w * col_norm.fillna(0)
-                total_weight += w
-    if total_weight > 0:
-        df_features['risk_index_raw'] = weighted_sum / total_weight * 100
-    else:
-        df_features['risk_index_raw'] = 0
-    # Apply cascading factor (example: multiply by (1 + CASCADE_K * risk_index_raw/100))
-    df_features['risk_index'] = df_features['risk_index_raw'] * (1 + CASCADE_K * df_features['risk_index_raw'] / 100)
-    # Clip to 0-100
-    df_features['risk_index'] = df_features['risk_index'].clip(0, 100)
-    return df_features
+
+BIAS_JUMP_TECU = 8.0          # 接收機偏差和前 5 天中位數相差超過此值，視為換了儀器
+
+
+def instrument_segments(ids, biases, jump=BIAS_JUMP_TECU):
+    """把一個測站的連續日子切成「同一套儀器」的段落，回傳段落編號。
+
+    換段的條件：(1) 儀器識別（序號、型號、韌體、天線）改變；(2) 接收機偏差突然跳動。
+    實例：NDHU 2026-10-20 型號同為 TRIMBLE NETR9、只換了序號與韌體，估計偏差 33 → −3 TECU。
+    背景值若跨過換機日，會把偏差差異誤判成 TEC 異常。
+    """
+    seg = np.zeros(len(ids), int)
+    k = 0
+    for i in range(1, len(ids)):
+        prev = [b for b, s in zip(biases[max(0, i - 5):i], seg[max(0, i - 5):i]) if s == k and not np.isnan(b)]
+        jumped = bool(prev) and not np.isnan(biases[i]) and abs(biases[i] - np.median(prev)) > jump
+        if ids[i] != ids[i - 1] or jumped:
+            k += 1
+        seg[i] = k
+    return seg
+
+
+def tec_station_features(series, daily, disturbed, storms):
+    s = series.copy()
+    s["time"] = pd.to_datetime(s["time"])
+    s["date"] = s["time"].dt.normalize()
+    s["slot"] = s["time"] - s["date"]
+    daily = daily.assign(date=pd.to_datetime(daily["date"]).dt.normalize())
+    hours = daily.set_index(["station", "date"])["hours_covered"]
+    idcol = "instrument_id" if "instrument_id" in daily else "receiver"
+    instrument = daily.set_index(["station", "date"])[idcol]
+    bias = daily.set_index(["station", "date"])["rx_bias_tecu"]
+    pos = daily.groupby("station")[["lat", "lon"]].median()
+    rows = []
+    for sta, g in s.groupby("station"):
+        tab = g.pivot_table(index="date", columns="slot", values="vtec")
+        days = tab.index
+        full = np.array([hours.get((sta, d), 0) >= MIN_TEC_HOURS for d in days])
+        bg_ok = full & ~np.isin(days, list(disturbed))
+        out_ok = full & ~np.isin(days, list(storms))
+        segment = instrument_segments([instrument.get((sta, d), "") for d in days],
+                                      [bias.get((sta, d), np.nan) for d in days])
+        for i, d in enumerate(days):
+            if not out_ok[i]:
+                continue
+            m = background_days(days, bg_ok & (segment == segment[i]), i)
+            if m.sum() < MIN_BG_DAYS:
+                continue
+            ref = tab[m]
+            q1, med, q3 = ref.quantile(0.25), ref.median(), ref.quantile(0.75)
+            iqr = q3 - q1
+            v = tab.loc[d]
+            ok = v.notna() & med.notna()
+            if ok.sum() < 48:                    # 至少 12 小時有背景可比
+                continue
+            dv = (v - med)[ok]
+            rows.append({
+                "station": sta, "date": d, "lat": pos.loc[sta, "lat"], "lon": pos.loc[sta, "lon"],
+                "tec_pos_frac": float((v[ok] > (med + IQR_K * iqr)[ok]).mean()),
+                "tec_neg_frac": float((v[ok] < (med - IQR_K * iqr)[ok]).mean()),
+                "tec_dmax": float(dv.max()), "tec_dmin": float(dv.min()), "tec_n_bg_days": int(m.sum()),
+            })
+    return pd.DataFrame(rows)
+
+
+def grid_cells(region, deg=GRID_DEG):
+    lat_b = np.arange(region["lat_min"], region["lat_max"] - 1e-9, deg)
+    lon_b = np.arange(region["lon_min"], region["lon_max"] - 1e-9, deg)
+    la, lo = np.meshgrid(lat_b, lon_b, indexing="ij")
+    return pd.DataFrame({"lat_bin": la.ravel().round(4), "lon_bin": lo.ravel().round(4)})
+
+
+def to_grid(st_feat, cols, cells, radius_km, prefix):
+    """每天、每個網格取最近且有值的測站。回傳只含「有值」的列。"""
+    if st_feat.empty:
+        return pd.DataFrame(columns=["lat_bin", "lon_bin", "time_bin"] + cols)
+    clat = cells["lat_bin"].to_numpy() + GRID_DEG / 2
+    clon = cells["lon_bin"].to_numpy() + GRID_DEG / 2
+    sta_pos = st_feat.groupby("station")[["lat", "lon"]].median()
+    names = sta_pos.index.to_numpy()
+    dist = np.stack([haversine_km(r.lat, r.lon, clat, clon) for r in sta_pos.itertuples()], axis=1)
+    parts = []
+    for d, g in st_feat.groupby("date"):
+        g = g.set_index("station")
+        have = g[cols].notna().any(axis=1)
+        avail = np.isin(names, g.index[have])
+        dd = np.where(avail[None, :], dist, np.inf)
+        j = dd.argmin(axis=1)
+        dmin = dd[np.arange(len(cells)), j]
+        ok = dmin <= radius_km
+        if not ok.any():
+            continue
+        pick = names[j[ok]]
+        vals = g.loc[pick, cols].to_numpy(float)
+        part = pd.DataFrame(vals, columns=cols)
+        part.insert(0, "lat_bin", cells["lat_bin"].to_numpy()[ok])
+        part.insert(1, "lon_bin", cells["lon_bin"].to_numpy()[ok])
+        part.insert(2, "time_bin", d)
+        part[f"{prefix}_station"] = pick
+        part[f"{prefix}_dist_km"] = dmin[ok].round(1)
+        parts.append(part)
+    out = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    if not out.empty:
+        out["is_demo"] = False
+    return out
+
+
+def load_disturbed(path, keep_disturbed):
+    """回傳 (擾動日集合, 磁暴日集合, 訊息)。"""
+    if keep_disturbed:
+        return set(), set(), "未排除擾動日（--keep-disturbed）"
+    if not Path(path).exists():
+        return set(), set(), f"⚠ 找不到 {path}，沒有排除擾動日；請先執行 00_download_space_weather.py"
+    sw = pd.read_parquet(path)
+    dates = pd.to_datetime(sw["date"]).dt.normalize()
+    dist = set(dates[sw["disturbed"].astype(bool)])
+    storm = set(dates[(sw["storm_kp"].astype(bool)) | (sw["storm_dst"].astype(bool))])
+    return dist, storm, (f"擾動日（不當背景）{len(dist)} 天；磁暴日（特徵設缺值）{len(storm)} 天"
+                         f"，資料期間 {dates.min().date()} ~ {dates.max().date()}")
+
+
+def load_indices(path):
+    """每日地磁指數表（索引為日期）。檔案不存在或缺欄位時回傳 None。"""
+    if not Path(path).exists():
+        return None
+    sw = pd.read_parquet(path)
+    if not set(REG_COLS) <= set(sw.columns):
+        return None
+    sw = sw.assign(date=pd.to_datetime(sw["date"]).dt.normalize())
+    return sw.drop_duplicates("date").set_index("date")[REG_COLS].astype(float)
+
 
 def main():
-    parser = argparse.ArgumentParser(description="Clean precursor data into gridded daily features.")
-    parser.add_argument('--demo', action='store_true',
-                        help='when no precursor data exists, write seeded random demo data '
-                             'to features_DEMO.parquet instead of failing')
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--magnet", default=str(DATA / "magnet" / "magnet_daily.parquet"))
+    ap.add_argument("--tec", default=str(DATA / "tec" / "tec_15min.parquet"))
+    ap.add_argument("--tec-daily", default=str(DATA / "tec" / "tec_daily.parquet"))
+    ap.add_argument("--space-weather", default=str(DATA / "space_weather_daily.parquet"))
+    ap.add_argument("--keep-disturbed", action="store_true")
+    ap.add_argument("--mag-ref", default=MAG_REF)
+    ap.add_argument("--out-dir", default=str(DATA))
+    args = ap.parse_args()
 
-    print("Loading precursor data...")
-    feature_list = []
-    for var_name, folder in PRECURSOR_FOLDERS.items():
-        print(f"Processing {var_name} from {folder}...")
-        df_raw = load_precursor(folder, var_name)
-        if df_raw.empty:
-            print(f"  No data for {var_name}, skipping.")
-            continue
-        df_bin = spatial_temporal_bin(df_raw)
-        print(f"  After binning: {df_bin.shape[0]} rows")
-        df_stats = sliding_stats(df_bin, window=3)
-        print(f"  After sliding stats: {df_stats.shape[0]} rows")
-        df_clean = denoise_iqr(df_stats)
-        print(f"  After denoising: {df_clean.shape[0]} rows")
-        feature_list.append((var_name, df_clean))
-    out_name = 'features.parquet'
-    if not feature_list:
-        # Previously this silently wrote random numbers to features.parquet,
-        # which looked like real output. Now it fails unless --demo is given.
-        if not args.demo:
-            sys.exit("ERROR: no precursor data found in PRECURSOR_FOLDERS. "
-                     "Add CSV files, or run with --demo for seeded fake data.")
-        print(f"No precursor data loaded. --demo: writing seeded random data (seed={RANDOM_SEED}).")
-        rng = np.random.default_rng(RANDOM_SEED)
-        times = pd.date_range('2024-01-01', periods=10, freq='1D')
-        lat_bin = 22.0  # example
-        lon_bin = 120.0
-        dummy = []
-        for t in times:
-            row = {'lat_bin': lat_bin, 'lon_bin': lon_bin, 'time_bin': t}
-            for var in PRECURSOR_FOLDERS.keys():
-                row[var] = rng.random()
-                row[f'{var}_rolling_mean'] = rng.random()
-                row[f'{var}_rolling_std'] = rng.random()
-            dummy.append(row)
-        df_features = pd.DataFrame(dummy)
-        df_features['is_demo'] = True
-        print("Applying weights to dummy data...")
-        df_features = apply_weights(df_features)
-        out_name = 'features_DEMO.parquet'
-    else:
-        print("Combining features...")
-        df_features = combine_features([df for _, df in feature_list])
-        print(f"Combined shape: {df_features.shape}")
-        print("Applying weights...")
-        df_features = apply_weights(df_features)
-    # Ensure output directory
-    out_dir = os.path.join(BASE_DIR, 'pipeline', 'data')
-    os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, out_name)
-    print(f"Saving to {out_path}...")
-    df_features.to_parquet(out_path, index=False)
-    print("Done.")
+    out_dir = Path(args.out_dir)
+    region = json.loads(CONFIG.read_text(encoding="utf-8"))["region"]
+    cells = grid_cells(region)
+    disturbed, storms, sw_msg = load_disturbed(args.space_weather, args.keep_disturbed)
+    print(sw_msg)
 
-if __name__ == '__main__':
+    have_mag, have_tec = Path(args.magnet).exists(), Path(args.tec).exists()
+    if not (have_mag or have_tec):
+        sys.exit("沒有前兆資料：請先執行 10_process_magnet.py 或 11_process_gnss_tec.py")
+    st_parts = []
+    if have_mag:
+        mag = pd.read_parquet(args.magnet)
+        indices = load_indices(args.space_weather)
+        mf = magnet_station_features(mag, disturbed, storms, args.mag_ref, indices)
+        if args.mag_ref not in set(mag["station"]):
+            print(f"⚠ 沒有參考站 {args.mag_ref} 的資料，mag_szref_z 全為缺值")
+        if indices is None:
+            print(f"⚠ 找不到地磁指數（{'、'.join(REG_COLS)}），mag_szres_z 全為缺值")
+        print("共同擾動扣除：" + "、".join(
+            f"{c} {int(mf[c].notna().sum())} 站日" for c in ("mag_szref_z", "mag_sznet_z", "mag_szres_z")))
+        gm = to_grid(mf, MAG_COLS, cells, MAG_RADIUS_KM, "mag")
+        gm.to_parquet(out_dir / "features_magnet.parquet", index=False)
+        print(f"地磁：{mf['station'].nunique()} 站、{len(mf)} 站日；有 z 值的站日 "
+              f"{int(mf['mag_pol_z'].notna().sum())}；網格日 {len(gm)} → features_magnet.parquet")
+        st_parts.append(mf.assign(source="magnet"))
+    if have_tec:
+        tf = tec_station_features(pd.read_parquet(args.tec), pd.read_parquet(args.tec_daily), disturbed, storms)
+        gt = to_grid(tf, TEC_COLS, cells, TEC_RADIUS_KM, "tec")
+        gt.to_parquet(out_dir / "features_tec.parquet", index=False)
+        n_sta = tf["station"].nunique() if not tf.empty else 0
+        print(f"TEC：{n_sta} 站、有異常指標的站日 {len(tf)}；網格日 {len(gt)} → features_tec.parquet")
+        st_parts.append(tf.assign(source="tec"))
+    st = pd.concat(st_parts, ignore_index=True)
+    st.to_parquet(out_dir / "station_anomalies.parquet", index=False)
+    print(f"測站層級指標：{out_dir / 'station_anomalies.parquet'}")
+
+
+if __name__ == "__main__":
     main()

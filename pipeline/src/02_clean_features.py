@@ -14,6 +14,13 @@
        mag_sz_z     log10(Sz) 的穩健 z 值
        mag_szref_z  log10(Sz / 參考站 Sz) 的穩健 z 值。參考站預設金門 KMN（距台灣本島 > 200 km），
                     用來扣掉磁層、太陽風造成的全區共同變化（梯度法）
+                    ※ KMN 實際只有 103 天可用（2018–2020），此欄幾乎全缺；保留作對照，
+                      實際扣除共同擾動改用下面兩欄。
+       mag_sznet_z  log10(Sz) − 當天「其他測站」log10(Sz) 中位數（不含自己，至少 2 站）的穩健 z 值。
+                    限制：只能凸顯單站附近的異常；涵蓋全台的訊號會被當成共同擾動一起扣掉。
+       mag_szres_z  log10(Sz) 扣掉「由 Kp 日總和、Dst 日最小值線性預期的值」後的殘差之穩健 z 值。
+                    迴歸每天重新擬合，只用當天之前 365 天內的非磁暴日（至少 60 天）。
+                    不依賴其他測站，可補測站少的時期；但全球指數只能解釋部分本地擾動。
    TEC（每站每 15 分鐘 → 每日）
        背景：背景日同一時刻的中位數 ± 1.5 IQR（和 case_ndh5_tec.py 相同）
        tec_pos_frac / tec_neg_frac   當天高於上界／低於下界的時間比例
@@ -21,7 +28,7 @@
    背景至少要 10 天；不足時該日特徵為缺值。
 2. 太空天氣（有 space_weather_daily.parquet 時）：
    擾動日（Kp ≥ 4 或 Dst ≤ −30 nT）不當背景；磁暴日（Kp ≥ 5 或 Dst ≤ −50 nT）當天特徵設為缺值。
-   一般擾動日仍出特徵：全區共同的擾動另由 mag_szref_z（相對參考站）扣除。
+   一般擾動日仍出特徵：全區共同的擾動另由 mag_sznet_z（測站網中位數）、mag_szres_z（指數迴歸殘差）扣除。
    --keep-disturbed 可全部關掉。
 3. 對應到網格：每個網格中心取「當天有資料、距離最近」的測站。
    地磁 ULF 訊號衰減快，限 150 km 內；TEC 是電離層 350 km 高的量，空間尺度大，限 300 km 內。
@@ -57,7 +64,11 @@ MIN_TEC_HOURS = 20.0          # 當天 TEC 少於 20 小時，同上
 MAG_RADIUS_KM = 150.0
 TEC_RADIUS_KM = 300.0
 MAG_REF = "KMN"
-MAG_COLS = ["mag_pol_z", "mag_sz_z", "mag_szref_z"]
+MIN_NET_STATIONS = 2          # 測站網中位數：當天至少要有幾個「其他測站」
+REG_COLS = ["kp_sum", "dst_min"]   # 指數迴歸的自變數（space_weather_daily.parquet 的欄位）
+REG_WINDOW_DAYS = 365         # 迴歸只用當天之前這麼多天
+REG_MIN_DAYS = 60             # 訓練日至少要這麼多天
+MAG_COLS = ["mag_pol_z", "mag_sz_z", "mag_szref_z", "mag_sznet_z", "mag_szres_z"]
 TEC_COLS = ["tec_pos_frac", "tec_neg_frac", "tec_dmax", "tec_dmin"]
 
 
@@ -92,23 +103,77 @@ def robust_z(values, dates, bg_ok, out_ok, min_bg=MIN_BG_DAYS):
     return pd.Series(out, index=t)
 
 
-def magnet_station_features(mag, disturbed, storms, ref=MAG_REF):
+def network_reference(mag, min_others=MIN_NET_STATIONS):
+    """每個站日的「其他測站當天 log_sz 中位數」（不含自己）。
+
+    只採計當天涵蓋率合格、log_sz 有值的測站；其他測站少於 min_others 個時回傳缺值。
+    只用同一天的資料，不涉及未來。
+    """
+    ok = (mag["coverage"] >= MIN_MAG_COVERAGE) & np.isfinite(mag["log_sz"])
+    tab = (mag[ok].drop_duplicates(["date", "station"])
+           .pivot(index="date", columns="station", values="log_sz"))
+    ref = {}
+    for sta in mag["station"].unique():
+        others = tab.drop(columns=[sta], errors="ignore")
+        med = others.median(axis=1, skipna=True)
+        ref[sta] = med.where(others.notna().sum(axis=1) >= min_others)
+    keys = pd.MultiIndex.from_arrays([mag["station"], mag["date"]])
+    if not ref:
+        return np.full(len(mag), np.nan)
+    stacked = pd.concat(ref, names=["station", "date"])
+    return stacked.reindex(keys).to_numpy(float)
+
+
+def index_residual(y, dates, X, fit_ok, window=REG_WINDOW_DAYS, min_fit=REG_MIN_DAYS):
+    """log_sz 扣掉「由地磁指數預期的值」後的殘差。
+
+    每一天各自擬合一次線性迴歸 y ~ 1 + X，訓練資料只取「當天之前 window 天內、fit_ok 為真」
+    的日子（不偷看未來）。訓練日不足 min_fit 天，或當天指數缺值時回傳缺值。
+    """
+    t = pd.DatetimeIndex(dates)
+    y = np.asarray(y, float)
+    X = np.asarray(X, float).reshape(len(y), -1)
+    usable = np.asarray(fit_ok, bool) & np.isfinite(y) & np.isfinite(X).all(axis=1)
+    A = np.column_stack([np.ones(len(y)), X])
+    out = np.full(len(y), np.nan)
+    for i in range(len(y)):
+        if not (np.isfinite(y[i]) and np.isfinite(X[i]).all()):
+            continue
+        m = usable & (t < t[i]) & (t >= t[i] - pd.Timedelta(days=window))
+        if m.sum() < min_fit:
+            continue
+        coef, *_ = np.linalg.lstsq(A[m], y[m], rcond=None)
+        out[i] = y[i] - A[i] @ coef
+    return out
+
+
+def magnet_station_features(mag, disturbed, storms, ref=MAG_REF, indices=None):
+    """indices：以日期為索引、含 REG_COLS 欄位的每日地磁指數表；沒有時 mag_szres_z 全為缺值。"""
     mag = mag.copy()
     mag["date"] = pd.to_datetime(mag["date"]).dt.normalize()
     mag["log_pol"] = np.log10(mag["ulf_pol"])
     mag["log_sz"] = np.log10(mag["ulf_sz"])
     ref_sz = mag[mag["station"] == ref].set_index("date")["log_sz"]
     mag["log_szref"] = mag["log_sz"] - mag["date"].map(ref_sz)
+    mag["log_sznet"] = mag["log_sz"] - network_reference(mag)
     good = mag["coverage"] >= MIN_MAG_COVERAGE
     mag["bg_ok"] = good & ~mag["date"].isin(disturbed)
     mag["out_ok"] = good & ~mag["date"].isin(storms)
     rows = []
     for sta, g in mag.sort_values("date").groupby("station"):
         g = g.drop_duplicates("date").set_index("date")
+        if indices is not None:
+            # 磁暴日當天不出特徵，也不拿來擬合；一般擾動日要留著，否則學不到指數與功率的關係
+            g["log_szres"] = index_residual(g["log_sz"].to_numpy(float), g.index,
+                                            indices.reindex(g.index)[REG_COLS].to_numpy(float),
+                                            g["out_ok"].to_numpy())
+        else:
+            g["log_szres"] = np.nan
         out = pd.DataFrame(index=g.index)
         out["station"] = sta
         out["lat"], out["lon"] = g["lat"], g["lon"]
-        for src, col in (("log_pol", "mag_pol_z"), ("log_sz", "mag_sz_z"), ("log_szref", "mag_szref_z")):
+        for src, col in (("log_pol", "mag_pol_z"), ("log_sz", "mag_sz_z"), ("log_szref", "mag_szref_z"),
+                         ("log_sznet", "mag_sznet_z"), ("log_szres", "mag_szres_z")):
             z = robust_z(g[src].to_numpy(float), g.index, g["bg_ok"].to_numpy(), g["out_ok"].to_numpy())
             out[col] = z.reindex(g.index).to_numpy()
         if sta == ref:
@@ -237,6 +302,17 @@ def load_disturbed(path, keep_disturbed):
                          f"，資料期間 {dates.min().date()} ~ {dates.max().date()}")
 
 
+def load_indices(path):
+    """每日地磁指數表（索引為日期）。檔案不存在或缺欄位時回傳 None。"""
+    if not Path(path).exists():
+        return None
+    sw = pd.read_parquet(path)
+    if not set(REG_COLS) <= set(sw.columns):
+        return None
+    sw = sw.assign(date=pd.to_datetime(sw["date"]).dt.normalize())
+    return sw.drop_duplicates("date").set_index("date")[REG_COLS].astype(float)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--magnet", default=str(DATA / "magnet" / "magnet_daily.parquet"))
@@ -260,9 +336,14 @@ def main():
     st_parts = []
     if have_mag:
         mag = pd.read_parquet(args.magnet)
-        mf = magnet_station_features(mag, disturbed, storms, args.mag_ref)
+        indices = load_indices(args.space_weather)
+        mf = magnet_station_features(mag, disturbed, storms, args.mag_ref, indices)
         if args.mag_ref not in set(mag["station"]):
             print(f"⚠ 沒有參考站 {args.mag_ref} 的資料，mag_szref_z 全為缺值")
+        if indices is None:
+            print(f"⚠ 找不到地磁指數（{'、'.join(REG_COLS)}），mag_szres_z 全為缺值")
+        print("共同擾動扣除：" + "、".join(
+            f"{c} {int(mf[c].notna().sum())} 站日" for c in ("mag_szref_z", "mag_sznet_z", "mag_szres_z")))
         gm = to_grid(mf, MAG_COLS, cells, MAG_RADIUS_KM, "mag")
         gm.to_parquet(out_dir / "features_magnet.parquet", index=False)
         print(f"地磁：{mf['station'].nunique()} 站、{len(mf)} 站日；有 z 值的站日 "

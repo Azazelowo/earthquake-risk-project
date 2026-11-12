@@ -28,7 +28,7 @@
       "name": "mag",
       "path": "pipeline/data/features_magnet.parquet",
       "lat_col": "lat_bin", "lon_col": "lon_bin", "native_cell_deg": 0.2, "time_col": "time_bin",
-      "value_cols": ["mag_pol_z", "mag_sz_z", "mag_szref_z"],
+      "value_cols": ["mag_pol_z", "mag_sz_z", "mag_szref_z", "mag_sznet_z", "mag_szres_z"],
       "lookback_days": 30,
       "aggs": ["mean", "max"]
     },

@@ -1,0 +1,199 @@
+{
+ "source": "https://global-seismic-fractal-analysis-dailyreport.unclejoe0306.chatgpt.site",
+ "report_date": "2026-11-13",
+ "revision": "b01548852e4fe5dc",
+ "version": {
+  "revision": "b01548852e4fe5dc",
+  "report_date": "2026-11-13",
+  "report_cutoff": "2026-11-13T06:02:23+08:00",
+  "new_hits": 0,
+  "unique_hits": 46,
+  "url": "/",
+  "title": "2026-11-13 全球強震日報"
+ },
+ "archived_at": "2026-11-13T03:32:09+00:00",
+ "files": [
+  {
+   "url": "/version.json",
+   "status": 200,
+   "bytes": 195,
+   "sha256": "ef0f6b67c084adc8300351c3f815225daafdf5ee31e2cd5a59be9ce4da772bfc",
+   "file": "version.json",
+   "fetched_at": "2026-11-13T03:31:41+00:00"
+  },
+  {
+   "url": "/",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:31:42+00:00",
+   "bytes": 43849,
+   "sha256": "777d13fba56d86d0ee056287d58cfe43000db80c02fdeec3b6213339e07fc76d",
+   "file": "index.html"
+  },
+  {
+   "url": "/statistics/2026-11-13/",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:31:44+00:00",
+   "bytes": 149174,
+   "sha256": "3d8df63f68ef3a523d6c5c2e8feed72b6cdfe0dfc139fa1645ce3deff0802d42",
+   "file": "statistics/2026-11-13/index.html"
+  },
+  {
+   "url": "/statistics/event-coverage/2026-11-13/",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:31:45+00:00",
+   "bytes": 30081,
+   "sha256": "99b88ba8df985ec4b93f04c90fccda4b0d4751fcca8f6c2a258b4420a31d8868",
+   "file": "statistics/event-coverage/2026-11-13/index.html"
+  },
+  {
+   "url": "/mesoscale/2026-11-13/",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:31:46+00:00",
+   "bytes": 215747,
+   "sha256": "7e9d7e9541844366a2f68039b9f13a28947e83902044790b60d710c2dc31500d",
+   "file": "mesoscale/2026-11-13/index.html"
+  },
+  {
+   "url": "/operational/",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:31:47+00:00",
+   "bytes": 36920,
+   "sha256": "4bce2a59c98c99e447104d643bbe99fa32ac60b4def8a71cc7bbb8243bb31ae6",
+   "file": "operational/index.html"
+  },
+  {
+   "url": "/maps/2026-11-13/signal-static-37c2604bed68.png",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:31:49+00:00",
+   "error": "超過 2097152 bytes，未存"
+  },
+  {
+   "url": "/research/mesoscale/2026-11-13/hotspot-today-wpac_super-1200.webp",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:31:50+00:00",
+   "bytes": 52882,
+   "sha256": "acf113bd26038bd0cb2828917fd37a20e2bb02f29314e5ce63490f481794fb39",
+   "file": "research/mesoscale/2026-11-13/hotspot-today-wpac_super-1200.webp"
+  },
+  {
+   "url": "/research/mesoscale/2026-11-13/hotspot-today-wpac_super-640.webp",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:31:51+00:00",
+   "bytes": 30386,
+   "sha256": "ae28c736a84e77b1ecc1d3116b7dcfccd338b70c86b2750af1ecbaf2b55d0ca4",
+   "file": "research/mesoscale/2026-11-13/hotspot-today-wpac_super-640.webp"
+  },
+  {
+   "url": "/research/mesoscale/2026-11-13/hotspot-today-eu-1200.webp",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:31:53+00:00",
+   "bytes": 52538,
+   "sha256": "a0e01397402846824608efb474dec3d70f16a176c555f9c917b390be851f4cb8",
+   "file": "research/mesoscale/2026-11-13/hotspot-today-eu-1200.webp"
+  },
+  {
+   "url": "/research/mesoscale/2026-11-13/hotspot-today-eu-640.webp",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:31:54+00:00",
+   "bytes": 31936,
+   "sha256": "0bd32f235c294d30fbc3dd18c5b68d7491a0b563b338c9de0dbf707b52ac2bb2",
+   "file": "research/mesoscale/2026-11-13/hotspot-today-eu-640.webp"
+  },
+  {
+   "url": "/research/mesoscale/2026-11-13/hotspot-today-indo-1200.webp",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:31:55+00:00",
+   "bytes": 55160,
+   "sha256": "68f7e0003cab57fa3e6c796b697f72959f873f6e551046689c4cfe17ef33ae5b",
+   "file": "research/mesoscale/2026-11-13/hotspot-today-indo-1200.webp"
+  },
+  {
+   "url": "/research/mesoscale/2026-11-13/hotspot-today-indo-640.webp",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:31:56+00:00",
+   "bytes": 34288,
+   "sha256": "05227dc6c4289316ac1e4343c1344f48b736221f29dbde28d30c7dcb69ad0006",
+   "file": "research/mesoscale/2026-11-13/hotspot-today-indo-640.webp"
+  },
+  {
+   "url": "/research/mesoscale/2026-11-13/hotspot-today-na-1200.webp",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:31:58+00:00",
+   "bytes": 60348,
+   "sha256": "f6501b9b254f77ce492fd71151849469b4a664f32c1cea9fd78c62597e121794",
+   "file": "research/mesoscale/2026-11-13/hotspot-today-na-1200.webp"
+  },
+  {
+   "url": "/research/mesoscale/2026-11-13/hotspot-today-na-640.webp",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:31:59+00:00",
+   "bytes": 37056,
+   "sha256": "1666e4e72b5149fab63a03d2e7ffaba94043a31f6058e32f70df78b6d7755b7c",
+   "file": "research/mesoscale/2026-11-13/hotspot-today-na-640.webp"
+  },
+  {
+   "url": "/research/mesoscale/2026-11-13/linked-33f7a10c17a75c0d/hotspot-retro-20261024-055905-residual-updated-1200.webp",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:32:00+00:00",
+   "bytes": 127740,
+   "sha256": "0fd9cbbb1623e5e48d0b1e121e2c5b70e219c66f2fc1fbbf2f81816587c5fc5d",
+   "file": "research/mesoscale/2026-11-13/linked-33f7a10c17a75c0d/hotspot-retro-20261024-055905-residual-updated-1200.webp"
+  },
+  {
+   "url": "/research/mesoscale/2026-11-13/linked-15a46ef913576062/hotspot-retro-20261026-055854-residual-updated-1200.webp",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:32:01+00:00",
+   "bytes": 127740,
+   "sha256": "0fd9cbbb1623e5e48d0b1e121e2c5b70e219c66f2fc1fbbf2f81816587c5fc5d",
+   "file": "research/mesoscale/2026-11-13/linked-15a46ef913576062/hotspot-retro-20261026-055854-residual-updated-1200.webp"
+  },
+  {
+   "url": "/research/mesoscale/2026-11-13/linked-7b15e851adbf0e72/hotspot-retro-20261019-060224-sw-updated-1200.webp",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:32:03+00:00",
+   "bytes": 60812,
+   "sha256": "660410f32ffe049d5638a0457c522362d70f154ad6ef43dac612443e59b19720",
+   "file": "research/mesoscale/2026-11-13/linked-7b15e851adbf0e72/hotspot-retro-20261019-060224-sw-updated-1200.webp"
+  },
+  {
+   "url": "/research/mesoscale/2026-11-13/linked-926a2036c08b5264/hotspot-retro-20261019-060224-wpac_super-updated-1200.webp",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:32:04+00:00",
+   "bytes": 78312,
+   "sha256": "7644d2c538a93fc4c79c1adb2cca40ea9feba57a76aa49ceeb5099825fca7309",
+   "file": "research/mesoscale/2026-11-13/linked-926a2036c08b5264/hotspot-retro-20261019-060224-wpac_super-updated-1200.webp"
+  },
+  {
+   "url": "/research/mesoscale/2026-11-13/linked-33f7a10c17a75c0d/hotspot-retro-20261024-055905-residual-updated-640.webp",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:32:05+00:00",
+   "bytes": 54576,
+   "sha256": "d940167b9ecca8beb57f1c7874e69657d192d34a4a1c71bc1ddb163aed5b9230",
+   "file": "research/mesoscale/2026-11-13/linked-33f7a10c17a75c0d/hotspot-retro-20261024-055905-residual-updated-640.webp"
+  },
+  {
+   "url": "/research/mesoscale/2026-11-13/linked-15a46ef913576062/hotspot-retro-20261026-055854-residual-updated-640.webp",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:32:06+00:00",
+   "bytes": 54576,
+   "sha256": "d940167b9ecca8beb57f1c7874e69657d192d34a4a1c71bc1ddb163aed5b9230",
+   "file": "research/mesoscale/2026-11-13/linked-15a46ef913576062/hotspot-retro-20261026-055854-residual-updated-640.webp"
+  },
+  {
+   "url": "/research/mesoscale/2026-11-13/linked-7b15e851adbf0e72/hotspot-retro-20261019-060224-sw-updated-640.webp",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:32:07+00:00",
+   "bytes": 26808,
+   "sha256": "0c291dd8000867ce468184446e5c6d0b59983fab88d0be2d981b26390b7bed18",
+   "file": "research/mesoscale/2026-11-13/linked-7b15e851adbf0e72/hotspot-retro-20261019-060224-sw-updated-640.webp"
+  },
+  {
+   "url": "/research/mesoscale/2026-11-13/linked-926a2036c08b5264/hotspot-retro-20261019-060224-wpac_super-updated-640.webp",
+   "status": 200,
+   "fetched_at": "2026-11-13T03:32:09+00:00",
+   "bytes": 33166,
+   "sha256": "3723b5f3f58d5dd65608cfce320ab440c1bdac73eecf48ff9caa2bef2e742c63",
+   "file": "research/mesoscale/2026-11-13/linked-926a2036c08b5264/hotspot-retro-20261019-060224-wpac_super-updated-640.webp"
+  }
+ ]
+}

@@ -65,6 +65,12 @@
   "exported_from": ".claude/worktrees/b2-main-folder-organize-e3c0e0/pipeline/data/hazard",
   "recent_events_days": 365.0,
   "recent_events_min_ml": 3.0,
-  "n_recent_events": 1171
+  "n_recent_events": 1171,
+  "n_catalog_base": 11790
+ },
+ "catalog_end": "2026-09-29 09:00:10.890000",
+ "data_status": {
+  "mode": "base",
+  "catalog_end": "2026-09-29 09:00:10.890000"
  }
 }

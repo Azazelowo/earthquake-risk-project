@@ -1,4 +1,5 @@
-# APP 執行需要（pydeck、altair 隨 streamlit 一起安裝）
+# APP 執行需要（pydeck、altair 隨 streamlit 一起安裝；scipy 給「更新到現在」重算用）
 streamlit==1.40.2
 pandas==3.1.0
 numpy==2.5.4
+scipy==1.18.1

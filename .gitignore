@@ -99,3 +99,6 @@ earthquake_data/
 
 # 地電資料下載排程的工作資料夾（Windows 排程每小時寫入，不能搬或改名）
 移轉/
+
+# APP 即時更新的輸出（app/live_update.py 產生，可隨時重產）
+app/live/

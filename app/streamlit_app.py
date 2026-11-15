@@ -17,7 +17,9 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hazard_core as hc  # noqa: E402
 
-DATA_DIR = Path(os.environ.get("HAZARD_APP_DATA", Path(__file__).resolve().parent / "data"))
+APP_DIR = Path(__file__).resolve().parent
+BASE_DATA = Path(os.environ.get("HAZARD_APP_DATA", APP_DIR / "data"))
+LIVE_DATA = APP_DIR / "live"
 
 CITIES = {  # 市（縣）政府附近的概略座標，只用來快速填入點位
     "臺北市": (25.0375, 121.5637), "新北市": (25.0120, 121.4650), "桃園市": (24.9936, 121.3010),
@@ -47,11 +49,14 @@ def parse_line(text):
     return pts
 
 
+DATA_DIR = hc.pick_data_dir(BASE_DATA, LIVE_DATA)
 try:
     snap = get_snapshot(str(DATA_DIR))
 except FileNotFoundError:
     st.error(f"找不到資料：{DATA_DIR}。請先執行 `python scripts/export_app_snapshot.py`。")
     st.stop()
+status = snap.params.get("data_status") or {}
+is_live = status.get("mode") == "live"
 
 # ---------------- 側欄：三個條件 ----------------
 st.sidebar.header("條件")
@@ -92,7 +97,26 @@ else:
     weights = hc.all_weights(snap)
     nominal_area = None
 
-st.sidebar.caption(f"資料發布時間：{snap.issue_time:%Y-%m-%d %H:%M}（目錄最後一天的隔日）")
+st.sidebar.subheader("資料狀態")
+cat_end = hc.to_taipei(snap.params.get("catalog_end", snap.issue_time))
+st.sidebar.caption(f"發布時間：**{hc.to_taipei(snap.issue_time):%Y-%m-%d %H:%M}**（台灣時間）  \n"
+                   f"正式目錄（GDMS／CWA）到：{cat_end:%Y-%m-%d %H:%M}")
+if is_live:
+    by = status.get("n_provisional_by_source", {})
+    st.sidebar.caption(f"之後 {status.get('gap_days', 0):.0f} 天用暫時資料補：CWA 有感報告 {by.get('CWA', 0)} 筆、"
+                       f"USGS {by.get('USGS', 0)} 筆（{hc.to_taipei(status['updated_at']):%m-%d %H:%M} 抓取）")
+    for err in status.get("errors", []):
+        st.sidebar.caption(f"⚠ {err}")
+if st.sidebar.button("🔄 更新到現在", help="抓 USGS 與 CWA 有感地震報告，用同一組參數重算發布時間＝現在的機率（約 10 秒）"):
+    import live_update  # noqa: E402  只有按下才載入（需要 scipy 與網路）
+    with st.spinner("抓取最新地震資料並重算…"):
+        try:
+            res = live_update.update(base_dir=BASE_DATA, live_dir=LIVE_DATA, log=lambda *_: None)
+        except Exception as e:  # noqa: BLE001  畫面上顯示原因，而不是整個 APP 當掉
+            st.sidebar.error(f"更新失敗：{e}")
+        else:
+            get_snapshot.clear()
+            st.rerun()
 
 # ---------------- 標題與主要數字 ----------------
 st.title("地震風險評估")
@@ -122,6 +146,15 @@ c3.metric("現在 ÷ 平常", (f"{ratio:.2f} 倍" if ratio < 10 else f"{ratio:.0
 st.caption(f"換個說法：{hc.format_odds(p_full)}。")
 
 rel = hc.reliability(snap, m, T)
+if is_live:
+    g = hc.gap_ratio_at(snap.params, T)
+    if g is not None and g < 0.97:
+        st.info(f"正式目錄只到 {cat_end:%m/%d}，之後的 {status.get('gap_days', 0):.0f} 天用 USGS 與 CWA 有感報告補，"
+                f"小地震不完整。在過去資料上模擬同樣的缺口，{T_label}的總數最多低估約 {(1 - g) * 100:.0f}%，"
+                "實際機率可能比顯示的略高。")
+else:
+    st.info(f"目前顯示的是正式目錄最後一天（{hc.to_taipei(snap.issue_time):%Y-%m-%d}）的預報，"
+            "按左側「更新到現在」可推進到現在。")
 for note in rel["notes"]:
     st.warning(note)
 
@@ -150,11 +183,16 @@ with tab_map:
     if show_ev and len(snap.events):
         ev = snap.events[snap.events["time"] >= snap.issue_time - pd.Timedelta(days=30)].copy()
         ev["radius"] = 1500 * 2.0 ** (ev["ml"] - 3)
-        ev["tip"] = [f"{t:%Y-%m-%d %H:%M}  M{ml:.1f}  深 {dp:.0f} km"
-                     for t, ml, dp in zip(ev["time"], ev["ml"], ev["depth"])]
+        src = ev["source"].fillna("目錄") if "source" in ev else pd.Series("目錄", index=ev.index)
+        ev["tip"] = [f"{hc.to_taipei(t):%Y-%m-%d %H:%M}（台灣）  M{ml:.1f}  深 {dp:.0f} km｜{s}"
+                     for t, ml, dp, s in zip(ev["time"], ev["ml"], ev["depth"], src)]
+        prov = src.str.contains("暫時")
+        ev["fill"] = [[230, 120, 0, 170] if p else [30, 60, 160, 120] for p in prov]
         layers.append(pdk.Layer("ScatterplotLayer", ev, get_position=["lon", "lat"], get_radius="radius",
-                                get_fill_color=[30, 60, 160, 120], get_line_color=[20, 30, 90, 220],
+                                get_fill_color="fill", get_line_color=[20, 30, 90, 220],
                                 stroked=True, line_width_min_pixels=1, pickable=True))
+        if prov.any():
+            st.caption("藍點：正式目錄；橘點：目錄結束後的暫時資料（CWA 有感報告、USGS）。")
     if overlay and overlay[0] == "point":
         la, lo, r = overlay[1]
         layers.append(pdk.Layer("ScatterplotLayer", pd.DataFrame({"lat": [la], "lon": [lo], "tip": ["選取範圍"]}),
@@ -245,7 +283,8 @@ with tab_rel:
 2. 我們也檢驗了地磁資料能不能讓預報更好：用循環時間平移的置換檢定，**沒有找到證據**（增益 −0.021 nat，p＝0.50），所以這個 APP 沒有使用地磁。
 3. M3.5 以下是往下外推（目錄不完整）；M6.5 以上樣本極少。
 4. 目錄以測站包覆角篩過，外海事件偏少，外海的機率偏低。
-5. 資料截至發布時間；這不是即時系統。
+5. 正式目錄約落後一個半月。「更新到現在」用 CWA 有感地震報告與 USGS 補上之後的地震，但小地震不完整，
+   近期加成會偏低（畫面上會顯示模擬出來的低估幅度）；校準倍率沿用正式目錄期間的值。
 """)
     st.caption(f"參數：b＝{snap.b:.3f}、M_ref＝{snap.m_ref:g}；訓練期 {snap.params['train'][0]}～{snap.params['train'][1]}、"
                f"測試期 {snap.params['test'][0]}～{snap.params['test'][1]}。")

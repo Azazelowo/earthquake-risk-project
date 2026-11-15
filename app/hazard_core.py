@@ -85,6 +85,35 @@ def background_rescale(params):
     return 1.0
 
 
+def to_taipei(ts):
+    """快照裡的時間都是不帶時區的 UTC；畫面上顯示台灣時間。"""
+    return pd.Timestamp(ts) + pd.Timedelta(hours=8)
+
+
+def pick_data_dir(base_dir, live_dir):
+    """有即時更新的輸出、且發布時間比正式快照新，就用即時版。"""
+    base_dir, live_dir = Path(base_dir), Path(live_dir)
+    try:
+        live = json.loads((live_dir / "params.json").read_text(encoding="utf-8"))
+        base = json.loads((base_dir / "params.json").read_text(encoding="utf-8"))
+        if pd.Timestamp(live["issue_time"]) > pd.Timestamp(base["issue_time"]) \
+                and (live_dir / "hazard_latest.csv").exists():
+            return live_dir
+    except (FileNotFoundError, KeyError, ValueError):
+        pass
+    return base_dir
+
+
+def gap_ratio_at(params, T):
+    """即時版的缺口評估（缺口版總數 ÷ 完整版），取最接近 T 的時間長度；沒有評估時回傳 None。"""
+    ratios = (params.get("data_status") or {}).get("gap_ratio") or {}
+    if not ratios:
+        return None
+    keys = np.array([float(k) for k in ratios])
+    k = list(ratios)[int(np.argmin(np.abs(np.log(keys) - np.log(T))))]
+    return float(ratios[k])
+
+
 def load_snapshot(data_dir):
     d = Path(data_dir)
     params = json.loads((d / "params.json").read_text(encoding="utf-8"))

@@ -45,9 +45,28 @@ streamlit run app/streamlit_app.py
 
 地圖底圖（Carto）需要網路；沒有網路時機率格子仍會顯示，只是沒有海岸線。
 
-## 更新資料
+## 即時更新（「更新到現在」）
 
-風險函數重新跑過（`pipeline/src/06_hazard_model.py`）之後：
+正式目錄（GDMS）要登入下載、約落後一個半月。側欄的 **🔄 更新到現在**（或 `python app/live_update.py`）會：
+
+1. 抓**目錄結束之後**的地震：CWA 有感地震報告（E-A0015-001、E-A0016-001，需環境變數 `CWA_API_KEY`）與 USGS FDSN。
+   CWA API 只留最新 16 筆，所以每次抓到的都累積進 `app/live/provisional_events.csv`；兩邊重複的事件
+   （≤10 秒且 ≤75 km）以 CWA 為準（同樣是 ML）。
+2. 用**同一組參數**和正式目錄期間的校準倍率，重算發布時間＝現在（整點）的機率，輸出到 `app/live/`。
+   APP 會自動改用比正式快照新的即時版。
+3. **量化缺口**：暫時資料的小地震不完整，近期加成會偏低。在正式目錄期間模擬「最後 N 天只剩 M4 以上」，
+   算出總數會被低估多少，顯示在畫面上（例：缺 47 天時，7 天的總數最多低估約 13%）。不拿來修正數字，
+   因為 CWA 有感報告其實補到了一部分 M4 以下，直接修正會過度補償。
+
+為什麼不直接重抓 GDMS：GDMS 的下載介面需要會員登入、背後是未公開的內部端點，自動化不穩，
+也有使用條款的疑慮（見 `docs/phase2/data_source_comparison.md`）。正式目錄仍以手動下載為準。
+
+驗證：`pipeline/tests/test_live_update.py` 確認用快照目錄重算能重現原模型輸出（相對誤差 < 1e-4），
+並用假的抓取函式測試累積、去重、斷線時的錯誤訊息。
+
+## 更新正式資料
+
+手動下載新的 GDMS 目錄 → `01_build_catalog.py` → `06_hazard_model.py` 之後：
 
 ```bash
 python scripts/export_app_snapshot.py --hazard-dir pipeline/data/hazard --events pipeline/data/events.parquet --out app/data
@@ -55,7 +74,7 @@ python scripts/export_app_snapshot.py --hazard-dir pipeline/data/hazard --events
 
 ## 限制
 
-- **不是地震預報**，也不是即時系統：資料截至快照的發布時間（目前 2026-09-30）。
+- **不是地震預報**。「更新到現在」之後的近期資料是暫時的，小地震不完整（見上）。
 - 預報的是全部地震（含餘震），技巧主要來自「大地震後會有餘震」。
 - 地磁前兆經置換檢定沒有找到證據（`docs/reports/hazard_precursor_mag/`），所以 APP 沒有使用。
 - 網格只涵蓋 21–26°N、119–123°E；外海事件因測站包覆角篩選而偏少。

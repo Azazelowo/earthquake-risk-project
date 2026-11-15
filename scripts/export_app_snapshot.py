@@ -8,7 +8,8 @@
     <hazard-dir>/hazard_latest.parquet   每格、每個時間長度的期望地震數（M≥m_ref，已校準）
     <hazard-dir>/params.json             參數、發布時間、校準倍率
     <hazard-dir>/backtest.csv            回測結果（APP 的「可信度」頁）
-    <events>                             地震目錄，只取發布時間前 365 天、M≥3 的地震畫在地圖上
+    <events>                             地震目錄：發布時間前 365 天、M≥3 的地震畫在地圖上；
+                                         另存 M≥m_ref 的完整目錄（catalog_base.csv）給即時更新用
 
 用法：
     python scripts/export_app_snapshot.py --hazard-dir pipeline/data/hazard \
@@ -42,15 +43,26 @@ def main():
     shutil.copyfile(src / "backtest.csv", out / "backtest.csv")
 
     ev = pd.read_parquet(args.events, columns=["time", "lat", "lon", "depth", "ml"])
+    ev["time"] = pd.to_datetime(ev["time"])
     g = params["grid"]
+    m_ref = float(params["params"]["m_ref"])
+    # 即時更新（app/live_update.py）要在任意時間重算發生率，需要完整的 M≥m_ref 目錄（背景項用整段歷史）
+    in_grid = ev["lat"].between(g["lat_min"], g["lat_max"]) & ev["lon"].between(g["lon_min"], g["lon_max"])
+    base = ev[in_grid & (ev["ml"] >= m_ref) & (ev["time"] < issue)].sort_values("time")
+    base[["time", "lat", "lon", "ml"]].to_csv(out / "catalog_base.csv", index=False, float_format="%.4f",
+                                              date_format="%Y-%m-%d %H:%M:%S")
+    catalog_end = ev.loc[ev["time"] < issue, "time"].max()
     keep = ((ev["time"] < issue) & (ev["time"] >= issue - pd.Timedelta(days=args.event_days))
             & (ev["ml"] >= args.event_min_ml)
             & ev["lat"].between(g["lat_min"], g["lat_max"]) & ev["lon"].between(g["lon_min"], g["lon_max"]))
-    ev = ev[keep].sort_values("time")
+    ev = ev[keep].sort_values("time").assign(source="目錄")
     ev.to_csv(out / "recent_events.csv", index=False, float_format="%.4f", date_format="%Y-%m-%d %H:%M:%S")
 
     params["snapshot"] = {"exported_from": str(src).replace("\\", "/"), "recent_events_days": args.event_days,
-                          "recent_events_min_ml": args.event_min_ml, "n_recent_events": int(len(ev))}
+                          "recent_events_min_ml": args.event_min_ml, "n_recent_events": int(len(ev)),
+                          "n_catalog_base": int(len(base))}
+    params["catalog_end"] = str(catalog_end)
+    params["data_status"] = {"mode": "base", "catalog_end": str(catalog_end)}
     (out / "params.json").write_text(json.dumps(params, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"快照已寫到 {out}：{len(latest)} 格、{len(ev)} 個近期地震，發布時間 {issue}")
 

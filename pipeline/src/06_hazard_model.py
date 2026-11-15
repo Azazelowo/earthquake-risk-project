@@ -36,6 +36,7 @@ REPORT = BASE_DIR / "docs" / "reports" / "hazard_v1"
 MAGS = [3.0, 3.5, 4.0, 5.0, 6.0]
 HORIZONS = [1 / 24, 1.0, 7.0, 30.0]
 EXPORT_HORIZONS = [1 / 24, 3 / 24, 6 / 24, 0.5, 1, 2, 3, 7, 14, 30]
+TRAILING_DAYS = 730            # 滾動校準回看的天數
 
 plt.rcParams["font.sans-serif"] = ["Microsoft JhengHei", "Noto Sans CJK TC", "DejaVu Sans"]
 plt.rcParams["axes.unicode_minus"] = False
@@ -62,13 +63,30 @@ def backtest(events, grid, prm, info, test_start, test_end, mags=MAGS, horizons=
             full.append(a + b)
             bgo.append(hz.expected_ref(cat, t, T, bg_only)[0])
         full, bgo = np.stack(full), np.stack(bgo)
+        raw_total = float(full.sum())
+        # 滾動校準：每週一個「校準用」的回顧窗，t0 只取在它之前已經結束、且在回看期間內的窗
+        lookback = np.timedelta64(int(TRAILING_DAYS), "D")
+        G = hz.issue_times(pd.Timestamp(test_start) - pd.Timedelta(days=TRAILING_DAYS + np.ceil(T) + 7), test_end, 7)
+        g_obs = np.array([cat.counts(g, g + h).sum() for g in G])
+        g_full = np.array([sum(x.sum() for x in hz.expected_ref(cat, g, T, prm)) for g in G])
+        g_bg = np.array([hz.expected_ref(cat, g, T, bg_only)[0].sum() for g in G])
+        factors = []
+        for k, t in enumerate(t0s):
+            use = (G + h <= t) & (G >= t - lookback)
+            f_full = hz.recalibration_factor(g_full[use].sum(), g_obs[use].sum())
+            full[k] *= f_full
+            bgo[k] *= hz.recalibration_factor(g_bg[use].sum(), g_obs[use].sum())
+            factors.append(f_full)
         uni = np.full_like(full, info["uniform_rate_per_cell_day"] * T)
         for m in mags:
             obs = np.stack([cat_obs.counts(t, t + h, min_ml=m) for t in t0s])
             n_ev = float(obs.sum())
             pos = obs > 0
             row = {"m": m, "horizon_days": T, "n_windows": len(t0s), "n_events": int(n_ev),
-                   "positive_cell_windows": int(pos.sum()), "base_rate": float(pos.mean())}
+                   "positive_cell_windows": int(pos.sum()), "base_rate": float(pos.mean()),
+                   "calib_factor_median": float(np.median(factors)),
+                   "n_ratio_uncalibrated": (float(hz.scale_magnitude(raw_total, m, prm.m_ref, prm.b) / n_ev)
+                                            if n_ev else np.nan)}
             ll = {}
             for name, ref in (("full", full), ("bg", bgo), ("uniform", uni)):
                 n_exp = hz.scale_magnitude(ref, m, prm.m_ref, prm.b)
@@ -87,11 +105,14 @@ def backtest(events, grid, prm, info, test_start, test_end, mags=MAGS, horizons=
 def export_latest(events, grid, prm, t0, horizons=EXPORT_HORIZONS):
     cat = hz.Catalog(events, grid, prm.m_ref)
     out = grid.frame()
+    factors = {}
     for T in horizons:
         a, b = hz.expected_ref(cat, t0, T, prm)
-        out[f"n_ref_{T:.5f}d"] = (a + b).ravel()
-        out[f"n_bg_{T:.5f}d"] = a.ravel()
-    return out
+        f = hz.trailing_factor(cat, t0, T, prm, trailing_days=TRAILING_DAYS)
+        factors[f"{T:.5f}"] = f
+        out[f"n_ref_{T:.5f}d"] = (a + b).ravel() * f
+        out[f"n_bg_{T:.5f}d"] = a.ravel() * f
+    return out, factors
 
 
 def plot_map(latest, grid, prm, m, T, t0, path):
@@ -137,21 +158,23 @@ def write_report(prm, info, bt, latest_t0, args, maps):
          "- **AUC**：把所有「格 × 窗」依機率排序，有地震的排在前面的程度（0.5 = 亂猜，1 = 完美）。",
          "- **預測／實際**：模型預測的地震總數 ÷ 實際發生數（1 = 剛好，> 1 = 高估）。",
          "- **基準率**：隨便挑一格一窗，剛好有地震的比例。任何「命中」都要和它比。", "",
-         "| 規模 | 時間 | 地震數 | 基準率 | 增益（對均勻） | 增益（對只有背景） | AUC 完整 | AUC 只有背景 | 預測／實際 |",
-         "|---|---|---|---|---|---|---|---|---|"]
+         "- **校準前**：沒有滾動校準時的「預測／實際」，用來看校準修正了多少。", "",
+         "| 規模 | 時間 | 地震數 | 基準率 | 增益（對均勻） | 增益（對只有背景） | AUC 完整 | AUC 只有背景 | 預測／實際 | 校準前 |",
+         "|---|---|---|---|---|---|---|---|---|---|"]
     for r in bt.itertuples():
         note = "（外推）" if r.m < prm.m_ref else ""
         L.append(f"| M≥{r.m:g}{note} | {horizon_label(r.horizon_days)} | {r.n_events} | {r.base_rate * 100:.3f}% | "
                  f"{fmt(r.gain_vs_uniform)} | {fmt(r.gain_vs_bg)} | {fmt(r.auc_full, 3)} | {fmt(r.auc_bg, 3)} | "
-                 f"{fmt(r.n_ratio_full)} |")
+                 f"{fmt(r.n_ratio_full)} | {fmt(r.n_ratio_uncalibrated)} |")
     L += ["", "地震數少於約 20 的列，數字只能當參考。M 小於參考規模的列是往下外推，那個範圍的目錄並不完整。", "",
           f"## 最新一期（發布時間 {pd.Timestamp(latest_t0):%Y-%m-%d}，即目錄最後一天的隔日）", ""]
     L += [f"![{m}]({m})\n" for m in maps]
     L += ["## 已知限制", "",
           "1. 近期加成的技巧主要來自「大地震後會有餘震」，這是已知規律，不是預測主震。",
-          "2. **總數校準不準**：參數只用 7 天的窗擬合，再套到 1 小時與 30 天。上表「預測／實際」若明顯小於 1，"
-          "代表模型低估地震總數（排序能力不受影響，但機率的絕對值偏低）。可能原因：測試期的地震活動比訓練期多、"
-          "餘震再觸發的餘震沒有算進去、近期活動只回看一年。下一版要依時間長度重新校準。",
+          f"2. **總數校準**：參數只用 7 天的窗擬合，直接套到其他時間長度會低估地震總數（見「校準前」欄）。"
+          f"現在每次發布前，會回看過去 {TRAILING_DAYS} 天內已經結束的預報窗，用「實際 ÷ 預測」修正整體倍率"
+          "（限制在 0.5–3 倍，只用過去資料）。這只修正全區總量，不改變各格的相對高低；"
+          "大地震剛發生後的幾週，倍率來不及反應，仍可能低估。",
           "3. 大森定律的 c 固定，沒有擬合；形狀參數只做粗略的格點搜尋，選到的值若在搜尋範圍邊界，代表範圍要再放寬"
           "（見 `pipeline/data/hazard/fit_grid.csv`）。",
           "4. `events.parquet` 已先以測站包覆角（Gap）篩過，外海事件偏少，所以外海的發生率偏低。",
@@ -192,10 +215,12 @@ def main():
     print(bt[["m", "horizon_days", "n_events", "base_rate", "gain_vs_uniform", "gain_vs_bg", "auc_full", "auc_bg",
               "n_ratio_full"]].round(4).to_string(index=False))
 
-    latest = export_latest(events, grid, prm, last)
+    latest, latest_factors = export_latest(events, grid, prm, last)
     latest.to_parquet(out / "hazard_latest.parquet", index=False)
+    print("最新一期的校準倍率：" + "、".join(f"{horizon_label(float(k))} ×{v:.2f}" for k, v in latest_factors.items()))
     (out / "params.json").write_text(json.dumps(
         {"params": prm.to_dict(), "fit_info": info, "issue_time": str(last), "export_horizons_days": EXPORT_HORIZONS,
+         "calibration_factors": latest_factors, "calibration_trailing_days": TRAILING_DAYS,
          "train": [args.train_start, args.train_end], "test": [args.test_start, args.test_end],
          "grid": {"lat_min": grid.lat_min, "lat_max": grid.lat_max, "lon_min": grid.lon_min, "lon_max": grid.lon_max,
                   "deg": grid.deg}}, ensure_ascii=False, indent=1), encoding="utf-8")

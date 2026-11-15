@@ -117,6 +117,30 @@ class BehaviourTest(unittest.TestCase):
             prev = a + b
 
 
+class RecalibrationTest(unittest.TestCase):
+    def test_factor_is_ratio_with_shrinkage_and_clipping(self):
+        self.assertAlmostEqual(hz.recalibration_factor(100.0, 200.0, prior=0.0), 2.0)
+        self.assertAlmostEqual(hz.recalibration_factor(0.0, 0.0), 1.0)          # 沒有資料 → 不調整
+        self.assertLess(hz.recalibration_factor(1.0, 4.0), 2.0)                 # 樣本少 → 往 1 收縮
+        self.assertEqual(hz.recalibration_factor(1.0, 1000.0), 3.0)
+        self.assertEqual(hz.recalibration_factor(1000.0, 1.0), 0.5)
+
+    def test_trailing_factor_corrects_activity_change_using_past_only(self):
+        quiet = synthetic(n=3000, seed=10, start="1995-01-01", end="2010-01-01")
+        busy = synthetic(n=3000, seed=11, start="2010-01-01", end="2013-01-01")   # 發生率變成 5 倍
+        ev = pd.concat([quiet, busy]).sort_values("time").reset_index(drop=True)
+        prm = hz.HazardParams(mu=1.0, K=0.0)
+        t0 = pd.Timestamp("2012-06-01")
+        cat = hz.Catalog(ev, GRID, 3.5)
+        f = hz.trailing_factor(cat, t0, 7.0, prm)
+        self.assertGreater(f, 1.8)                                              # 背景是長期平均，近兩年明顯偏低
+        ev2 = ev.copy()
+        ev2.loc[ev2["time"] >= t0, "lat"] = 99.0                                # 把未來的事件移出區外
+        self.assertAlmostEqual(hz.trailing_factor(hz.Catalog(ev2, GRID, 3.5), t0, 7.0, prm), f, places=12)
+        self.assertAlmostEqual(hz.trailing_factor(hz.Catalog(quiet, GRID, 3.5), pd.Timestamp("2009-06-01"), 7.0, prm),
+                               1.0, delta=0.15)                                 # 發生率穩定時接近 1
+
+
 class FitTest(unittest.TestCase):
     def test_fit_mu_k_recovers_linear_mix(self):
         rng = np.random.default_rng(7)

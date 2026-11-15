@@ -154,6 +154,31 @@ def expected_ref(cat, t0, horizon_days, prm):
     return prm.mu * bg, prm.K * st
 
 
+def recalibration_factor(pred_total, obs_total, prior=5.0, clip=(0.5, 3.0)):
+    """實際 ÷ 預測的比值，加上少量虛擬計數避免樣本少時暴衝，並限制在合理範圍。"""
+    return float(np.clip((obs_total + prior) / (pred_total + prior), *clip))
+
+
+def trailing_factor(cat, t0, horizon_days, prm, trailing_days=730.0, step_days=7.0):
+    """滾動校準倍率：回看 t0 之前 trailing_days 內「已經結束」的預報窗，比較預測與實際的地震總數。
+
+    為什麼需要：背景發生率是整段歷史的平均，地震活動變多（或變少）的時期會系統性低估（或高估）。
+    這個倍率只用 t0 之前已知結果的窗，不偷看未來。
+    """
+    t0 = np.datetime64(t0, "us")
+    h = np.timedelta64(int(round(horizon_days * 86400)), "s")
+    step = np.timedelta64(int(round(step_days * 86400)), "s")
+    lo = t0 - np.timedelta64(int(round(trailing_days * 86400)), "s")
+    pred = obs = 0.0
+    t = t0 - h
+    while t >= lo:
+        a, b = expected_ref(cat, t, horizon_days, prm)
+        pred += float(a.sum() + b.sum())
+        obs += float(cat.counts(t, t + h).sum())
+        t = t - step
+    return recalibration_factor(pred, obs)
+
+
 def scale_magnitude(n_ref, m, m_ref, b):
     """把 M≥m_ref 的期望次數換算成 M≥m。"""
     return np.asarray(n_ref, float) * 10 ** (-b * (m - m_ref))
@@ -205,7 +230,8 @@ def issue_times(start, end, step_days):
 
 
 def fit(events, grid, train_start, train_end, m_ref=3.5, horizon_days=7.0,
-        alphas=(0.6, 0.8, 1.0), ps=(1.0, 1.2), sigmas_st=(0.5, 1.0), sigmas_bg=(1.0, 2.0), base=None):
+        alphas=(0.2, 0.4, 0.6, 0.8, 1.0), ps=(0.8, 0.9, 1.0, 1.1, 1.2), sigmas_st=(0.25, 0.5, 1.0),
+        sigmas_bg=(0.5, 1.0, 2.0), base=None):
     """用 [train_start, train_end) 的資料估參數。回傳 (HazardParams, 搜尋紀錄 DataFrame)。
 
     b 值只用 train_end 之前的地震；每個訓練窗的背景與近期項只用該窗發布時間之前的地震。

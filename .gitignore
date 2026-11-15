@@ -96,3 +96,6 @@ venv/
 
 # Phase 2 第 1 層原始資料（USGS 原始 CSV 等），僅存在本機，不進版控
 earthquake_data/
+
+# 地電資料下載排程的工作資料夾（Windows 排程每小時寫入，不能搬或改名）
+移轉/

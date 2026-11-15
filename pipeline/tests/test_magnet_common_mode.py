@@ -117,5 +117,57 @@ class StationFeatureTest(unittest.TestCase):
         self.assertEqual(set(CF.MAG_COLS) - set(out.columns), set())
 
 
+class MagnetSegmentTest(unittest.TestCase):
+    def frame(self, h, z=None, coverage=None):
+        days = pd.date_range("2022-01-01", periods=len(h), freq="D")
+        return pd.DataFrame({"h_mean": h, "z_mean": np.full(len(h), 26000.0) if z is None else z,
+                             "coverage": np.ones(len(h)) if coverage is None else coverage}, index=days)
+
+    def test_level_shift_starts_new_segment_and_noise_does_not(self):
+        rng = np.random.default_rng(0)
+        h = 36000 + rng.normal(0, 10, 60)
+        h[30:] += 400                                           # 第 30 天起基線永久改變
+        seg = CF.magnet_segments(self.frame(h), set())
+        self.assertEqual(list(np.unique(seg)), [0, 1])
+        self.assertEqual(int(np.argmax(seg == 1)), 30)
+        self.assertEqual(CF.magnet_segments(self.frame(36000 + rng.normal(0, 10, 60)), set()).max(), 0)
+
+    def test_storm_day_and_low_coverage_day_do_not_split(self):
+        h = np.full(40, 36000.0)
+        h[20] -= 300                                            # 單日大偏移
+        g = self.frame(h)
+        self.assertGreater(CF.magnet_segments(g, set()).max(), 0)             # 不知道是磁暴 → 會切段
+        self.assertEqual(CF.magnet_segments(g, {g.index[20]}).max(), 0)       # 標為磁暴日 → 不切
+        cov = np.ones(40)
+        cov[20] = 0.3
+        self.assertEqual(CF.magnet_segments(self.frame(h, coverage=cov), set()).max(), 0)
+
+    def test_jump_in_either_component_splits_and_past_only(self):
+        h, z = np.full(50, 36000.0), np.full(50, 26000.0)
+        z[25:] -= 250
+        seg = CF.magnet_segments(self.frame(h, z), set())
+        self.assertEqual(int(np.argmax(seg == 1)), 25)
+        h2 = h.copy()
+        h2[40:] += 900                                          # 改掉未來，不應影響第 40 天之前的段落
+        np.testing.assert_array_equal(CF.magnet_segments(self.frame(h2, z), set())[:40], seg[:40])
+
+    def test_background_does_not_cross_segment(self):
+        mag, idx = synthetic(stations=("AAA", "BBB", "CCC"))
+        mag["h_mean"], mag["z_mean"] = 36000.0, 26000.0
+        aaa_late = (mag["station"] == "AAA") & (mag["date"] >= DAYS[100])
+        mag.loc[aaa_late, "h_mean"] += 500                     # AAA 第 100 天換儀器
+        mag.loc[aaa_late, "ulf_sz"] *= 30                      # 新儀器雜訊底不同
+        out = CF.magnet_station_features(mag, set(), set(), indices=idx).set_index(["station", "date"])
+        self.assertEqual(out.loc[("AAA", DAYS[99]), "mag_segment"] + 1, out.loc[("AAA", DAYS[100]), "mag_segment"])
+        # 換段後的前 10 天湊不滿背景 → 沒有值，而不是出現一串假異常
+        self.assertTrue(out.loc[[("AAA", d) for d in DAYS[100:109]], "mag_sz_z"].isna().all())
+        self.assertLess(abs(out.loc[("AAA", DAYS[130]), "mag_sz_z"]), 4)
+
+    def test_missing_mean_columns_means_single_segment(self):
+        mag, _ = synthetic(stations=("AAA", "BBB", "CCC"))
+        out = CF.magnet_station_features(mag, set(), set())
+        self.assertEqual(out["mag_segment"].max(), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

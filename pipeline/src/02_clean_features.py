@@ -64,7 +64,8 @@ MIN_TEC_HOURS = 20.0          # 當天 TEC 少於 20 小時，同上
 MAG_RADIUS_KM = 150.0
 TEC_RADIUS_KM = 300.0
 MAG_REF = "KMN"
-MIN_NET_STATIONS = 2          # 測站網中位數：當天至少要有幾個「其他測站」
+MAG_JUMP_NT = 100.0           # 日平均 H 或 Z 與同段前 5 天中位數相差超過此值 → 視為換儀器／基線改變
+MIN_NET_STATIONS = 2         # 測站網中位數：當天至少要有幾個「其他測站」
 REG_COLS = ["kp_sum", "dst_min"]   # 指數迴歸的自變數（space_weather_daily.parquet 的欄位）
 REG_WINDOW_DAYS = 365         # 迴歸只用當天之前這麼多天
 REG_MIN_DAYS = 60             # 訓練日至少要這麼多天
@@ -82,18 +83,22 @@ def background_days(dates, bg_ok, i, search=BG_SEARCH_DAYS, n=BG_DAYS):
     return out
 
 
-def robust_z(values, dates, bg_ok, out_ok, min_bg=MIN_BG_DAYS):
-    """穩健 z 值。背景只用過去、bg_ok 的日子；out_ok 為假的日子不出值。"""
+def robust_z(values, dates, bg_ok, out_ok, min_bg=MIN_BG_DAYS, segment=None):
+    """穩健 z 值。背景只用過去、bg_ok 的日子；out_ok 為假的日子不出值。
+
+    segment：每天所屬的「同一套儀器」段落編號；有給時背景只取同一段的日子。
+    """
     order = np.argsort(pd.DatetimeIndex(dates))
     t = pd.DatetimeIndex(dates)[order]
     v = np.asarray(values, float)[order]
     bg_ok = np.asarray(bg_ok, bool)[order] & ~np.isnan(v)
     out_ok = np.asarray(out_ok, bool)[order]
+    seg = None if segment is None else np.asarray(segment)[order]
     out = np.full(len(t), np.nan)
     for i in range(len(t)):
         if not out_ok[i] or np.isnan(v[i]):
             continue
-        bg = v[background_days(t, bg_ok, i)]
+        bg = v[background_days(t, bg_ok if seg is None else bg_ok & (seg == seg[i]), i)]
         if len(bg) < min_bg:
             continue
         med = np.median(bg)
@@ -147,6 +152,27 @@ def index_residual(y, dates, X, fit_ok, window=REG_WINDOW_DAYS, min_fit=REG_MIN_
     return out
 
 
+def magnet_segments(g, storms, jump_nt=MAG_JUMP_NT):
+    """地磁測站的「同一套儀器」段落編號（g 以日期為索引、已排序）。
+
+    MAGNET 沒有公開的換儀器紀錄，只能從資料推斷：日平均 H 或 Z 與「同一段內前 5 天的中位數」
+    相差超過 jump_nt，就視為儀器或基線改變，從那天起算新的一段。判斷只用當天與之前的資料。
+    - 磁暴日的日平均本來就可能偏移上百 nT，所以磁暴日與涵蓋率不足的日子不拿來判斷。
+    - 基線不穩的時期會被切成很多很短的段；短段湊不滿背景天數，自然不會出特徵。
+    沒有 h_mean／z_mean 欄位（舊資料或合成資料）時，全部視為同一段。
+    """
+    n = len(g)
+    if not {"h_mean", "z_mean"} <= set(g.columns):
+        return np.zeros(n, int)
+    usable = (g["coverage"].to_numpy(float) >= MIN_MAG_COVERAGE) & ~np.isin(g.index, list(storms))
+    total = np.zeros(n, int)
+    for col in ("h_mean", "z_mean"):
+        v = np.where(usable, g[col].to_numpy(float), np.nan)
+        total += instrument_segments([""] * n, v, jump=jump_nt)
+    # 兩個分量各自的段落編號相加後仍是遞增的；任一分量換段，總和就會變 → 整體換段
+    return np.cumsum(np.r_[False, np.diff(total) != 0]).astype(int)
+
+
 def magnet_station_features(mag, disturbed, storms, ref=MAG_REF, indices=None):
     """indices：以日期為索引、含 REG_COLS 欄位的每日地磁指數表；沒有時 mag_szres_z 全為缺值。"""
     mag = mag.copy()
@@ -172,9 +198,12 @@ def magnet_station_features(mag, disturbed, storms, ref=MAG_REF, indices=None):
         out = pd.DataFrame(index=g.index)
         out["station"] = sta
         out["lat"], out["lon"] = g["lat"], g["lon"]
+        seg = magnet_segments(g, storms)
+        out["mag_segment"] = seg
         for src, col in (("log_pol", "mag_pol_z"), ("log_sz", "mag_sz_z"), ("log_szref", "mag_szref_z"),
                          ("log_sznet", "mag_sznet_z"), ("log_szres", "mag_szres_z")):
-            z = robust_z(g[src].to_numpy(float), g.index, g["bg_ok"].to_numpy(), g["out_ok"].to_numpy())
+            z = robust_z(g[src].to_numpy(float), g.index, g["bg_ok"].to_numpy(), g["out_ok"].to_numpy(),
+                         segment=seg)
             out[col] = z.reindex(g.index).to_numpy()
         if sta == ref:
             out["mag_szref_z"] = np.nan          # 參考站對自己的比值沒有意義

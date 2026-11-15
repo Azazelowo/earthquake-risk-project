@@ -112,14 +112,26 @@ def _km(lat1, lon1, lat2, lon2):
     return 2 * 6371.0 * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
 
 
+def typed(df):
+    """固定欄位型別。空表格和有資料的表格 concat 時，部分 pandas 版本會把數字欄變成 object，後面的數值運算會壞。"""
+    df = df.reindex(columns=PROV_COLS).copy()
+    for c in ("lat", "lon", "depth", "ml"):
+        df[c] = pd.to_numeric(df[c], errors="coerce").astype("float64")
+    for c in ("time", "fetched_at"):
+        df[c] = pd.to_datetime(df[c], errors="coerce")
+    for c in ("source", "source_id"):
+        df[c] = df[c].astype("string")
+    return df
+
+
 def accumulate(store, new):
     """把新抓到的事件併進累積檔（同 source_id 以較新抓到的為準）。"""
-    both = pd.concat([store, new], ignore_index=True)
-    if both.empty:
-        return pd.DataFrame(columns=PROV_COLS)
-    both["time"] = pd.to_datetime(both["time"])
+    parts = [typed(x) for x in (store, new) if len(x)]
+    if not parts:
+        return typed(pd.DataFrame())
+    both = pd.concat(parts, ignore_index=True)
     both = both.sort_values("fetched_at").drop_duplicates("source_id", keep="last")
-    return both.sort_values("time").reset_index(drop=True)[PROV_COLS]
+    return both.sort_values("time").reset_index(drop=True)
 
 
 def merge_sources(prov):
@@ -194,9 +206,8 @@ def read_base_catalog(base_dir=BASE_DIR):
 
 def read_store(path):
     if Path(path).exists():
-        df = pd.read_csv(path, parse_dates=["time", "fetched_at"])
-        return df.reindex(columns=PROV_COLS)
-    return pd.DataFrame(columns=PROV_COLS)
+        return typed(pd.read_csv(path))
+    return typed(pd.DataFrame())
 
 
 def update(now=None, base_dir=BASE_DIR, live_dir=LIVE_DIR, network=True, cwa_key=None, log=print,
@@ -238,10 +249,12 @@ def update(now=None, base_dir=BASE_DIR, live_dir=LIVE_DIR, network=True, cwa_key
     prov = store[(store["time"] > catalog_end) & (store["time"] < t0)
                  & store["lat"].between(grid["lat_min"], grid["lat_max"])
                  & store["lon"].between(grid["lon_min"], grid["lon_max"])]
-    prov = merge_sources(prov) if len(prov) else prov
-    events = pd.concat([base_events[["time", "lat", "lon", "ml"]], prov[["time", "lat", "lon", "ml"]]],
-                       ignore_index=True)
+    prov = typed(merge_sources(prov)) if len(prov) else prov
+    cols = ["time", "lat", "lon", "ml"]
+    events = pd.concat([base_events[cols]] + ([prov[cols]] if len(prov) else []), ignore_index=True)
     events["time"] = pd.to_datetime(events["time"])
+    for c in ("lat", "lon", "ml"):
+        events[c] = events[c].astype("float64")
 
     latest = compute_hazard(events, params, t0)
     latest.to_csv(live_dir / "hazard_latest.csv", index=False, float_format="%.6g")
@@ -257,9 +270,9 @@ def update(now=None, base_dir=BASE_DIR, live_dir=LIVE_DIR, network=True, cwa_key
     })
 
     recent_base = pd.read_csv(base_dir / "recent_events.csv", parse_dates=["time"])
-    recent = pd.concat([recent_base, prov.assign(source=prov["source"].map({"CWA": "CWA 有感報告（暫時）",
+    recent = pd.concat([recent_base] + ([] if prov.empty else [prov.assign(source=prov["source"].map({"CWA": "CWA 有感報告（暫時）",
                                                                            "USGS": "USGS（暫時）"}))
-                        [["time", "lat", "lon", "depth", "ml", "source"]]], ignore_index=True)
+                        [["time", "lat", "lon", "depth", "ml", "source"]]]), ignore_index=True)
     recent = recent[recent["time"] >= t0 - pd.Timedelta(days=365)]
     recent.to_csv(live_dir / "recent_events.csv", index=False, float_format="%.4f", date_format="%Y-%m-%d %H:%M:%S")
 

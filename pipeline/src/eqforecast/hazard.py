@@ -28,6 +28,45 @@ from scipy.optimize import minimize
 
 DAY = np.timedelta64(1, "D")
 
+# 形狀參數的搜尋範圍。v1 的範圍是 alpha 0.2–1.0、p 0.8–1.2、sigma_bg 0.5–2.0，最佳值三個都落在下限
+# （審查 M3：落在邊界代表真正的最佳值可能在範圍外），所以往外放寬；fit() 會檢查最佳值是否仍在邊界。
+ALPHAS = (0.0, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.5)
+PS = (0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.4)
+SIGMAS_ST = (0.25, 0.5, 1.0)
+SIGMAS_BG = (0.25, 0.5, 1.0, 2.0)
+
+EVENT_QUALITIES = ("located", "all")
+
+
+def load_events(path, quality="located"):
+    """讀取 01_build_catalog.py 輸出的 events.parquet。回傳 (DataFrame[time, lat, lon, ml], 摘要 dict)。
+
+    為什麼要篩選（審查 M1）：events.parquet 是兩種事件的聯集——定位品質好的事件（gap ≤ 110°，
+    use_for_features）加上「ML ≥ 5.5 不論 gap」的回測目標。全部拿來估發生率時，3.5–5.5 級有一部分被
+    定位品質篩掉（外海最多），5.5 級以上卻全部保留，大地震的比例被人為放大：b 值偏低，大規模的機率偏高。
+
+    quality="located"（預設）：只用 use_for_features。擬合、回測、匯出都用同一個母體，
+        模型回答的是「地震網能良好定位（gap ≤ 110° 或未知）的地震」；外海定位差的地震不在母體內。
+    quality="all"：v1 的舊行為（聯集），只用來和新版比較。
+    """
+    if quality not in EVENT_QUALITIES:
+        raise ValueError(f"quality 必須是 {EVENT_QUALITIES} 之一，收到 {quality!r}")
+    cols = ["time", "lat", "lon", "ml"]
+    df = pd.read_parquet(path)
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"{path} 缺少欄位 {missing}")
+    df["time"] = pd.to_datetime(df["time"])
+    n_all = len(df)
+    time_max = df["time"].max()   # 目錄的最後一筆（篩選前）：發布時間以它為準，不受篩選影響
+    if quality == "located":
+        if "use_for_features" not in df.columns:
+            raise ValueError(f"{path} 沒有 use_for_features 欄位：請用目前的 01_build_catalog.py 重建，"
+                             "或指定 quality='all'（舊行為）")
+        df = df[df["use_for_features"].astype(bool)]
+    out = df[cols].reset_index(drop=True)
+    return out, {"quality": quality, "n_all": int(n_all), "n_used": int(len(out)), "time_max": str(time_max)}
+
 
 @dataclass
 class Grid:
@@ -208,13 +247,23 @@ def poisson_ll(n_obs, n_exp):
 
 
 def fit_mu_k(obs, bg, st, with_short_term=True):
-    """給定形狀參數下，以最大概似估 mu、K。obs、bg、st 形狀相同（窗 × 格攤平）。"""
+    """給定形狀參數下，以最大概似估 mu、K。obs、bg、st 形狀相同（窗 × 格攤平）。
+
+    目標函數和 poisson_ll(obs, mu·bg + K·st) 相同，只是改寫成：
+        Σ_{obs>0} obs·log(mu·bg + K·st) − (mu·Σbg + K·Σst)
+    沒有地震的格窗只出現在第二項，而第二項可以先加總。格窗中有地震的通常不到幾 %，
+    所以每次計算快很多；格點搜尋放寬（數百組）後仍然跑得動。
+    """
     obs, bg, st = (np.asarray(x, float).ravel() for x in (obs, bg, st))
+    pos = obs > 0
+    o, b_pos, s_pos = obs[pos], bg[pos], st[pos]
+    sum_bg, sum_st = float(bg.sum()), float(st.sum())
 
     def nll(theta):
         mu = np.exp(theta[0])
         k = np.exp(theta[1]) if with_short_term else 0.0
-        return -poisson_ll(obs, mu * bg + k * st)
+        n = np.clip(mu * b_pos + k * s_pos, 1e-300, None)
+        return -(float(np.sum(o * np.log(n))) - (mu * sum_bg + k * sum_st))
 
     total = obs.sum()
     x0 = [np.log(max(total / max(bg.sum(), 1e-12), 1e-6) * (0.5 if with_short_term else 1.0)),
@@ -229,12 +278,30 @@ def issue_times(start, end, step_days):
     return pd.date_range(start, end, freq=f"{int(step_days)}D", inclusive="left").to_numpy("datetime64[us]")
 
 
+def boundary_hits(best, grids):
+    """最佳值落在搜尋範圍兩端的參數：[(名稱, 值, "下限" 或 "上限"), …]。
+
+    落在邊界代表真正的最佳值可能在範圍外，報告要提醒（審查 M3）。只有一個候選值的參數不檢查。
+    """
+    hits = []
+    for name, values in grids.items():
+        values = sorted(values)
+        if len(values) < 2:
+            continue
+        v = best[name]
+        if np.isclose(v, values[0]):
+            hits.append((name, float(v), "下限"))
+        elif np.isclose(v, values[-1]):
+            hits.append((name, float(v), "上限"))
+    return hits
+
+
 def fit(events, grid, train_start, train_end, m_ref=3.5, horizon_days=7.0,
-        alphas=(0.2, 0.4, 0.6, 0.8, 1.0), ps=(0.8, 0.9, 1.0, 1.1, 1.2), sigmas_st=(0.25, 0.5, 1.0),
-        sigmas_bg=(0.5, 1.0, 2.0), base=None):
-    """用 [train_start, train_end) 的資料估參數。回傳 (HazardParams, 搜尋紀錄 DataFrame)。
+        alphas=ALPHAS, ps=PS, sigmas_st=SIGMAS_ST, sigmas_bg=SIGMAS_BG, base=None):
+    """用 [train_start, train_end) 的資料估參數。回傳 (HazardParams, 搜尋紀錄 DataFrame, 摘要 dict)。
 
     b 值只用 train_end 之前的地震；每個訓練窗的背景與近期項只用該窗發布時間之前的地震。
+    摘要裡的 boundary_hits 列出最佳值落在搜尋範圍邊界的參數。
     """
     base = base or HazardParams(m_ref=m_ref)
     cat = Catalog(events, grid, m_ref)
@@ -260,6 +327,9 @@ def fit(events, grid, train_start, train_end, m_ref=3.5, horizon_days=7.0,
                        sigma_bg=best["sigma_bg"], sigma_st=best["sigma_st"], floor_frac=base.floor_frac,
                        lookback_days=base.lookback_days)
     mu_bg, _, ll_bg = fit_mu_k(obs, bgs[prm.sigma_bg], np.zeros_like(obs), with_short_term=False)
+    grids = {"alpha": alphas, "p": ps, "sigma_st": sigmas_st, "sigma_bg": sigmas_bg}
     info = {"n_windows": int(len(t0s)), "n_events": int(obs.sum()), "ll_full": best["ll"], "ll_bg_only": ll_bg,
-            "mu_bg_only": mu_bg, "uniform_rate_per_cell_day": float(obs.sum() / obs.size / horizon_days)}
+            "mu_bg_only": mu_bg, "uniform_rate_per_cell_day": float(obs.sum() / obs.size / horizon_days),
+            "search_grid": {k: [float(v) for v in vals] for k, vals in grids.items()},
+            "boundary_hits": [list(h) for h in boundary_hits(best, grids)]}
     return prm, pd.DataFrame(rows).sort_values("ll", ascending=False).reset_index(drop=True), info

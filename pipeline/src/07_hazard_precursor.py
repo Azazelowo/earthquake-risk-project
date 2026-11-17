@@ -59,11 +59,18 @@ def main():
     ap.add_argument("--split", default="2024-01-01", help="之前為訓練、之後為測試")
     ap.add_argument("--n-shifts", type=int, default=200)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--event-quality", choices=hz.EVENT_QUALITIES, default=None,
+                    help="預設沿用 params.json 記錄的事件母體，讓前兆檢定和風險函數用同一批地震")
     args = ap.parse_args()
 
-    events = pd.read_parquet(args.events, columns=["time", "lat", "lon", "ml"])
-    events["time"] = pd.to_datetime(events["time"])
-    prm = hz.HazardParams(**json.loads(Path(args.params).read_text(encoding="utf-8"))["params"])
+    meta = json.loads(Path(args.params).read_text(encoding="utf-8"))
+    # params.json 沒有記錄母體的（v1）是用全部事件擬合的，要沿用同一個母體，檢定才公平
+    quality = args.event_quality or meta.get("event_quality", {}).get("quality", "all")
+    if "event_quality" not in meta and args.event_quality is None:
+        print("注意：params.json 是 v1 產生的（沒有記錄事件母體），沿用 all。建議先重跑 06_hazard_model.py。")
+    events, ev_info = hz.load_events(args.events, quality)
+    print(f"事件：{ev_info['quality']}，使用 {ev_info['n_used']:,} / {ev_info['n_all']:,} 筆")
+    prm = hz.HazardParams(**meta["params"])
     grid = hz.Grid()
     cat = hz.Catalog(events, grid, prm.m_ref)
     feat = pd.read_parquet(args.features, columns=["lat_bin", "lon_bin", "time_bin"] + COLS)
@@ -118,6 +125,7 @@ def main():
          "把地磁特徵當成風險函數發生率的倍率，看測試期的預報有沒有變準。樣本是全部 M≥3.5 的地震（不是只有大地震），",
          "所以有足夠的數量做檢定；再把規模門檻提高，檢查「只有大地震才看得到地磁影響」的猜想。", "",
          f"- 預報窗 {HORIZON:g} 天；訓練 {pd.Timestamp(t0s[0]).date()} ～ {args.split}，測試 {args.split} ～ {pd.Timestamp(t0s[-1]).date()}",
+         f"- 事件母體：{ev_info['quality']}（{ev_info['n_used']:,} / {ev_info['n_all']:,} 筆），和風險函數的參數一致",
          f"- 特徵：每格在發布時間之前 7 天、30 天的平均 z 值（{'、'.join(COL_LABEL.values())}），共 {len(names)} 個",
          f"- 有完整地磁特徵的格窗：{covered.mean() * 100:.1f}%（其餘離測站超過 150 km 或資料不足，不納入）",
          "- **資訊增益**：每個測試期地震平均多得到的資訊（nat）。0 = 和沒加地磁一樣；負值 = 加了反而變差。",

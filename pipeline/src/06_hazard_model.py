@@ -38,6 +38,7 @@ MAGS = [3.0, 3.5, 4.0, 5.0, 6.0]
 HORIZONS = [1 / 24, 1.0, 7.0, 30.0]
 EXPORT_HORIZONS = [1 / 24, 3 / 24, 6 / 24, 0.5, 1, 2, 3, 7, 14, 30]
 TRAILING_DAYS = 730            # 滾動校準回看的天數
+MODEL_VERSION = "v1.1"         # v1.1（2026-11-17）：事件母體統一、搜尋範圍放寬、均勻對照校準
 
 plt.rcParams["font.sans-serif"] = ["Microsoft JhengHei", "Noto Sans CJK TC", "DejaVu Sans"]
 plt.rcParams["axes.unicode_minus"] = False
@@ -71,14 +72,20 @@ def backtest(events, grid, prm, info, test_start, test_end, mags=MAGS, horizons=
         g_obs = np.array([cat.counts(g, g + h).sum() for g in G])
         g_full = np.array([sum(x.sum() for x in hz.expected_ref(cat, g, T, prm)) for g in G])
         g_bg = np.array([hz.expected_ref(cat, g, T, bg_only)[0].sum() for g in G])
-        factors = []
+        # 均勻對照也走同一套滾動校準（審查 M4）：v1 的均勻對照固定用訓練期的發生率，測試期總數改變時
+        # 只有完整模型與「只有背景」會被校正，「增益（對均勻）」因此被高估。
+        uni = np.full_like(full, info["uniform_rate_per_cell_day"] * T)
+        g_uni = np.full(len(G), float(uni[0].sum()) if len(uni) else 0.0)
+        factors, factors_uni = [], []
         for k, t in enumerate(t0s):
             use = (G + h <= t) & (G >= t - lookback)
             f_full = hz.recalibration_factor(g_full[use].sum(), g_obs[use].sum())
             full[k] *= f_full
             bgo[k] *= hz.recalibration_factor(g_bg[use].sum(), g_obs[use].sum())
+            f_uni = hz.recalibration_factor(g_uni[use].sum(), g_obs[use].sum())
+            uni[k] *= f_uni
             factors.append(f_full)
-        uni = np.full_like(full, info["uniform_rate_per_cell_day"] * T)
+            factors_uni.append(f_uni)
         for m in mags:
             obs = np.stack([cat_obs.counts(t, t + h, min_ml=m) for t in t0s])
             n_ev = float(obs.sum())
@@ -86,6 +93,7 @@ def backtest(events, grid, prm, info, test_start, test_end, mags=MAGS, horizons=
             row = {"m": m, "horizon_days": T, "n_windows": len(t0s), "n_events": int(n_ev),
                    "positive_cell_windows": int(pos.sum()), "base_rate": float(pos.mean()),
                    "calib_factor_median": float(np.median(factors)),
+                   "calib_factor_uniform_median": float(np.median(factors_uni)),
                    "n_ratio_uncalibrated": (float(hz.scale_magnitude(raw_total, m, prm.m_ref, prm.b) / n_ev)
                                             if n_ev else np.nan)}
             ll = {}
@@ -136,25 +144,41 @@ def plot_map(latest, grid, prm, m, T, t0, path):
     plt.close(fig)
 
 
-def write_report(prm, info, bt, latest_t0, args, maps):
+QUALITY_TEXT = {
+    "located": "只用定位品質良好的事件（方位角空隙 gap ≤ 110° 或未知，`use_for_features`）；擬合、回測、匯出都用同一個母體",
+    "all": "`events.parquet` 全部事件（v1 的舊行為：gap ≤ 110° 的事件加上 ML ≥ 5.5 不論 gap，兩種母體混在一起）",
+}
+
+
+def write_report(prm, info, bt, latest_t0, args, maps, ev_info):
     def fmt(v, nd=2):
         return "—" if pd.isna(v) else f"{v:.{nd}f}"
 
-    L = ["# 連續式風險函數 v1：回測報告", "",
+    grid_txt = "、".join(f"{k} {'／'.join(f'{v:g}' for v in vals)}" for k, vals in info["search_grid"].items())
+    hits = info["boundary_hits"]
+    hit_txt = ("⚠ 最佳值落在搜尋範圍邊界：" + "、".join(f"{n} = {v:g}（{side}）" for n, v, side in hits)
+               + "。真正的最佳值可能在範圍外，或模型形式本身需要調整（見已知限制 3）。") if hits else "最佳值都在搜尋範圍內部。"
+    L = [f"# 連續式風險函數 {MODEL_VERSION}：回測報告", "",
          f"> 由 `pipeline/src/06_hazard_model.py` 產生（{pd.Timestamp.now():%Y-%m-%d %H:%M}）。重新執行會覆寫本檔。", "",
+         "> **v1.1 的修正（2026-11-17 審查）**：① 事件母體統一（M1）② 形狀參數搜尋範圍放寬，並檢查是否落在邊界（M3）"
+         "③ 均勻對照也做滾動校準（M4）。v1 的數字不能和本版直接比較。", "",
          "## 這個模型回答什麼", "",
          "「從現在起 T 這麼久之內，這一格發生規模 m 以上地震的機率是多少？」m 與 T 都可以任意指定。",
          "做法是先估每格的發生率（以前常震的地方 ＋ 最近剛震過的地方），再用規模分布與時間長度換算。",
          "公式與限制見 `pipeline/src/eqforecast/hazard.py` 開頭。", "",
          "**和 B3 的差別**：這裡預報的是全部地震（含餘震），B3 只算去群聚後的主震。兩者的分數不能互相比較。", "",
          "## 參數", "",
+         f"- 事件母體：{QUALITY_TEXT[ev_info['quality']]}（{ev_info['n_used']:,} / {ev_info['n_all']:,} 筆，各規模合計）",
          f"- 訓練期 {args.train_start} ～ {args.train_end}：{info['n_windows']} 個 {args.fit_horizon:g} 天的窗、"
          f"{info['n_events']} 個 M≥{prm.m_ref:g} 地震",
          f"- 測試期 {args.test_start} ～ {pd.Timestamp(args.test_end):%Y-%m-%d}",
          f"- b 值 {prm.b:.3f}（只用訓練期結束前的地震）",
          f"- 背景倍率 mu = {prm.mu:.3f}；近期加成 K = {prm.K:.4g}、alpha = {prm.alpha:g}、p = {prm.p:g}、c = {prm.c:g} 天",
-         f"- 平滑寬度：背景 {prm.sigma_bg:g} 格、近期 {prm.sigma_st:g} 格（一格 0.2°）", "",
+         f"- 平滑寬度：背景 {prm.sigma_bg:g} 格、近期 {prm.sigma_st:g} 格（一格 0.2°）",
+         f"- 形狀參數的搜尋範圍：{grid_txt}。{hit_txt}", "",
          "## 回測結果（測試期）", "",
+         "- **三個模型（完整、只有背景、均勻）都用同一套滾動校準**，所以增益比較的是空間與時間的分布，"
+         "不是「誰的總數剛好比較準」。",
          "- **資訊增益**：每個地震平均多得到多少資訊（單位 nat；0 = 和對照一樣，越大越好）。",
          "- **AUC**：把所有「格 × 窗」依機率排序，有地震的排在前面的程度（0.5 = 亂猜，1 = 完美）。",
          "- **預測／實際**：模型預測的地震總數 ÷ 實際發生數（1 = 剛好，> 1 = 高估）。",
@@ -176,9 +200,11 @@ def write_report(prm, info, bt, latest_t0, args, maps):
           f"現在每次發布前，會回看過去 {TRAILING_DAYS} 天內已經結束的預報窗，用「實際 ÷ 預測」修正整體倍率"
           "（限制在 0.5–3 倍，只用過去資料）。這只修正全區總量，不改變各格的相對高低；"
           "大地震剛發生後的幾週，倍率來不及反應，仍可能低估。",
-          "3. 大森定律的 c 固定，沒有擬合；形狀參數只做粗略的格點搜尋，選到的值若在搜尋範圍邊界，代表範圍要再放寬"
-          "（見 `pipeline/data/hazard/fit_grid.csv`）。",
-          "4. `events.parquet` 已先以測站包覆角（Gap）篩過，外海事件偏少，所以外海的發生率偏低。",
+          "3. 大森定律的 c 固定，沒有擬合；形狀參數用格點搜尋（全部組合見 `pipeline/data/hazard/fit_grid.csv`）。"
+          "近期加成的空間平滑寬度和規模無關，但大地震的餘震區其實大很多（M7 約上百公里）；"
+          "若 alpha（規模對餘震數的影響）仍偏小或落在下限，最可能的原因是這個簡化，而不是大地震真的不太產生餘震。",
+          "4. 事件母體只含地震網能良好定位的地震（gap ≤ 110° 或未知）。外海 gap 大的地震（含部分大地震）"
+          "不在模型裡，所以外海的機率代表「能被良好定位的地震」，實際會偏低。",
           "5. 尚未加入地磁、TEC 等前兆；這一版是之後檢驗前兆時的對照基準。", ""]
     REPORT.mkdir(parents=True, exist_ok=True)
     (REPORT / "README.md").write_text("\n".join(L), encoding="utf-8")
@@ -194,12 +220,14 @@ def main():
     ap.add_argument("--m-ref", type=float, default=3.5)
     ap.add_argument("--fit-horizon", type=float, default=7.0)
     ap.add_argument("--out", default=str(DATA / "hazard"))
+    ap.add_argument("--event-quality", choices=hz.EVENT_QUALITIES, default="located",
+                    help="located（預設）＝只用 gap ≤ 110° 的事件；all＝v1 的舊行為，只供比較")
     args = ap.parse_args()
 
-    events = pd.read_parquet(args.events, columns=["time", "lat", "lon", "ml"])
-    events["time"] = pd.to_datetime(events["time"])
+    events, ev_info = hz.load_events(args.events, args.event_quality)
+    print(f"事件：{ev_info['quality']}，使用 {ev_info['n_used']:,} / {ev_info['n_all']:,} 筆")
     grid = hz.Grid()
-    last = (events["time"].max() + pd.Timedelta(days=1)).normalize()
+    last = (pd.Timestamp(ev_info["time_max"]) + pd.Timedelta(days=1)).normalize()
     args.test_end = str(last.date()) if args.test_end is None else args.test_end
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -209,6 +237,8 @@ def main():
     print(f"b = {prm.b:.3f}；mu = {prm.mu:.3f}、K = {prm.K:.4g}、alpha = {prm.alpha}、p = {prm.p}、"
           f"sigma_bg = {prm.sigma_bg}、sigma_st = {prm.sigma_st}")
     print(f"訓練期對數概似：完整 {info['ll_full']:.1f}、只有背景 {info['ll_bg_only']:.1f}（{info['n_events']} 個地震）")
+    if info["boundary_hits"]:
+        print("注意：最佳值落在搜尋範圍邊界：" + "、".join(f"{n}={v:g}（{s}）" for n, v, s in info["boundary_hits"]))
     grid_log.to_csv(out / "fit_grid.csv", index=False)
 
     bt = backtest(events, grid, prm, info, args.test_start, args.test_end)
@@ -220,7 +250,8 @@ def main():
     latest.to_parquet(out / "hazard_latest.parquet", index=False)
     print("最新一期的校準倍率：" + "、".join(f"{horizon_label(float(k))} ×{v:.2f}" for k, v in latest_factors.items()))
     (out / "params.json").write_text(json.dumps(
-        {"params": prm.to_dict(), "fit_info": info, "issue_time": str(last), "export_horizons_days": EXPORT_HORIZONS,
+        {"model_version": MODEL_VERSION, "event_quality": ev_info,
+         "params": prm.to_dict(), "fit_info": info, "issue_time": str(last), "export_horizons_days": EXPORT_HORIZONS,
          "calibration_factors": latest_factors, "calibration_trailing_days": TRAILING_DAYS,
          "train": [args.train_start, args.train_end], "test": [args.test_start, args.test_end],
          "grid": {"lat_min": grid.lat_min, "lat_max": grid.lat_max, "lon_min": grid.lon_min, "lon_max": grid.lon_max,
@@ -231,7 +262,7 @@ def main():
         name = f"map_M{m:g}_{T}d.png"
         plot_map(latest, grid, prm, m, float(T), last, REPORT / name)
         maps.append(name)
-    write_report(prm, info, bt, last, args, maps)
+    write_report(prm, info, bt, last, args, maps, ev_info)
     print(f"輸出：{out}；報告：{REPORT / 'README.md'}")
 
 

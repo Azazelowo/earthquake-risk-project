@@ -24,8 +24,8 @@
 
 | # | 類別 | 檔案 | 函式 | 行號 | 原因 | 改善方式 |
 |---|---|---|---|---|---|---|
-| H1 | 資安（未來） | APP `src/ui/expert.ts` | `viewVerify`、`viewMore` | 265、279 | `data_status.sources`、`recent[].source`、`depth_km` **沒有經過 `esc()`** 就放進 `innerHTML`。TypeScript 的型別（`"GDMS"\|"CWA"\|"USGS"`）只在編譯時檢查，Phase 2 的 feed.json 是外部資料，執行時不受限制 | 一律加上 `esc()`；數字欄位用 `Number()` 轉換後再輸出 |
-| H2 | 錯誤處理 | APP `src/data/schema.ts`（整體） | — | 4-23 | feed.json **沒有執行時的格式驗證**。欄位缺少或型別錯誤時，畫面會在任意位置拋出例外 | 載入時用一個 `validateFeed()` 檢查版本、陣列長度、數值範圍；失敗就退回「資料暫時無法使用」 |
+| H1 | 資安（未來） | APP `src/ui/expert.ts` | `viewVerify`、`viewMore` | 265、279 | `data_status.sources`、`recent[].source`、`depth_km` **沒有經過 `esc()`** 就放進 `innerHTML`。TypeScript 的型別（`"GDMS"\|"CWA"\|"USGS"`）只在編譯時檢查，Phase 2 的 feed.json 是外部資料，執行時不受限制 | **已修正**（APP ca0ab66：`esc()`，並補上審查時漏掉的 `map.ts:176` 彈出框；`render.test.ts` 在舊程式上會失敗） |
+| H2 | 錯誤處理 | APP `src/data/schema.ts`（整體） | — | 4-23 | feed.json **沒有執行時的格式驗證**。欄位缺少或型別錯誤時，畫面會在任意位置拋出例外 | **已修正**（APP 3235e12：`src/data/feed.ts` 的 `validateFeed`；破專題端發布前另有 `check_feed`） |
 | H3 | 錯誤處理 | APP `src/core/hazard.ts`、`src/main.ts` | `interpHorizon`、`render` | hazard:12；main:69 | T 超出 1 小時到 30 天時，`interpHorizon` 直接丟出例外，而 `render` 沒有攔截，整頁空白（狀態事件 S-13） | `render` 外面包一層 try/catch，失敗時退回預設條件；`sanitize` 限制 T 的範圍（`state.ts:87`） |
 | H4 | 邏輯（統計） | `06_hazard_model.py` | `backtest` | 80 | 均勻對照沒有做滾動校準，「增益（對均勻）」被高估 | **已修正**（commit b67f272） |
 | H5 | 邏輯（統計） | `eqforecast/hazard.py` | `fit` | 232-234 | alpha、p、sigma_bg 的最佳值都落在搜尋範圍的下限 | **部分解決**（commit b67f272：放寬到 768 組並自動標出邊界；重跑後 p、sigma_bg 離開邊界，但 alpha 落在物理下限 0，屬於模型形式問題，見 11 第 5 節） |

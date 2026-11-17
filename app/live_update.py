@@ -45,6 +45,7 @@ CWA_URL = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/{}?format=JSON"
 CWA_DATASETS = ("E-A0015-001", "E-A0016-001")
 MATCH_S, MATCH_KM = 10.0, 75.0
 GAP_PROXY_ML = 4.0
+ISSUE_STEP = "15min"  # 發布時間取到 15 分鐘（排程每 15 分鐘跑一次）；模型的時間是連續的，不依賴整點
 PROV_COLS = ["time", "lat", "lon", "depth", "ml", "source", "source_id", "fetched_at"]
 
 
@@ -218,7 +219,7 @@ def update(now=None, base_dir=BASE_DIR, live_dir=LIVE_DIR, network=True, cwa_key
     params = load_params(base_dir)
     grid = params["grid"]
     now = pd.Timestamp.now("UTC").tz_localize(None) if now is None else pd.Timestamp(now)
-    t0 = now.floor("h")
+    t0 = now.floor(ISSUE_STEP)
     catalog_end = pd.Timestamp(params["catalog_end"])
     base_events = read_base_catalog(base_dir)
     store_path = live_dir / "provisional_events.csv"

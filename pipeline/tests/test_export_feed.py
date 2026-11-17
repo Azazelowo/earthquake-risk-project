@@ -58,7 +58,7 @@ class ExportFeedTest(unittest.TestCase):
             prov.to_csv(live / "provisional_events.csv", index=False)
             status = lu.update(now="2026-11-12 03:30:00", base_dir=BASE, live_dir=live, network=False, log=lambda *_: None)
             f = ef.check_feed(ef.build_feed(hc.load_snapshot(live)))
-        self.assertEqual(f["issued_at"], "2026-11-12T03:00:00Z")
+        self.assertEqual(f["issued_at"], "2026-11-12T03:30:00Z")  # 發布時間取到 15 分鐘
         self.assertEqual(f["data_status"]["n_provisional"], 1)
         self.assertIn(ef.SOURCE_NAMES["USGS"], f["data_status"]["sources"])
         self.assertEqual([e["source"] for e in f["recent"][:1]], ["USGS"])   # 最新的一筆是暫時資料

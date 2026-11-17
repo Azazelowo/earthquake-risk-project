@@ -80,7 +80,7 @@ class TestRecompute(unittest.TestCase):
 
             status = lu.update(now="2026-11-15 04:20", base_dir=BASE, live_dir=live, cwa_key="k", log=lambda *_: None,
                                fetch_usgs_fn=fake_usgs, fetch_cwa_fn=fake_cwa)
-            self.assertEqual(status["issue_time"], "2026-11-15 04:00:00")
+            self.assertEqual(status["issue_time"], "2026-11-15 04:15:00")  # 取到 15 分鐘
             self.assertEqual(status["n_provisional_by_source"], {"CWA": 1, "USGS": 1})
             self.assertFalse(status["errors"])
             self.assertEqual(calls["cwa"], "k")
@@ -89,7 +89,7 @@ class TestRecompute(unittest.TestCase):
             # APP 會選即時版，而且讀得進來
             self.assertEqual(hc.pick_data_dir(BASE, live), live)
             snap = hc.load_snapshot(live)
-            self.assertEqual(snap.issue_time, pd.Timestamp("2026-11-15 04:00"))
+            self.assertEqual(snap.issue_time, pd.Timestamp("2026-11-15 04:15"))
             self.assertTrue((snap.events["source"] == "USGS（暫時）").any())
             self.assertIsNotNone(hc.gap_ratio_at(snap.params, 7))
             # 再跑一次（離線）不會重複累積

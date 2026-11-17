@@ -1,0 +1,72 @@
+# 每小時把風險資料更新到「現在」，發布成手機 APP 讀的 feed.json（APP Phase 2）。
+#
+# 流程：讀 feed 分支上累積的暫時資料 → app/live_update.py 抓 CWA 有感報告與 USGS、以 v1.1 參數重算到整點
+#      → app/export_feed.py 轉成 feed.json 並檢查格式 → 推回 feed 分支。
+# APP 讀 https://raw.githubusercontent.com/<repo>/feed/feed.json（見 earthquake-risk-app/src/data/feed.ts）。
+#
+# 為什麼 feed 分支每次都只留一個 commit（強制推送）：feed.json 約 120 KB，每小時一個 commit，
+#   一年會讓 repo 多出數 GB。分支上只需要最新狀態，加上累積的暫時資料（CWA API 只保留最新 16 筆，
+#   漏抓的補不回來，所以 provisional_events.csv 一定要留著）。
+# 需要的 Secret：CWA_API_KEY（沒設也能跑，只用 USGS 的 M4 以上，feed 的資料狀態會註明）。
+name: Hourly feed
+
+on:
+  schedule:
+    - cron: "17 * * * *"   # 每小時第 17 分（避開整點的排程尖峰；GitHub 的排程可能延遲數分鐘到數十分鐘）
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hourly-feed
+  cancel-in-progress: false
+
+jobs:
+  feed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v5
+
+      - name: Check out the feed branch (accumulated provisional events)
+        id: feedbranch
+        continue-on-error: true   # 第一次執行時 feed 分支還不存在
+        uses: actions/checkout@v5
+        with:
+          ref: feed
+          path: feed-branch
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Update to now and export feed.json
+        env:
+          CWA_API_KEY: ${{ secrets.CWA_API_KEY }}
+          PYTHONUTF8: "1"
+        run: |
+          mkdir -p work out
+          if [ -f feed-branch/provisional_events.csv ]; then cp feed-branch/provisional_events.csv work/; fi
+          python app/live_update.py --live work
+          python app/export_feed.py --data work --out out/feed.json
+          cp work/provisional_events.csv out/ 2>/dev/null || true
+          cp work/params.json out/status.json
+          echo "## feed.json" >> "$GITHUB_STEP_SUMMARY"
+          python -c "import json;f=json.load(open('out/feed.json',encoding='utf-8'));d=f['data_status'];print(f\"- 發布 {f['issued_at']}；暫時資料 {d['n_provisional']} 筆；來源：{'、'.join(d['sources'])}\")" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish to the feed branch (single commit)
+        run: |
+          cd out
+          git init -q -b feed
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "feed $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -f -q "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" feed:feed

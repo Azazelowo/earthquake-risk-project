@@ -1,80 +1,49 @@
-# 地震風險評估 APP
+# app/：手機 APP 的資料後端（Phase 2）
 
-規模、時間、地點三項**任選兩項固定，看第三項怎麼變**（「3 中 2」）：
+手機 APP（另一個 repo：`earthquake-risk-app`）不在手機上跑模型，只讀這裡每小時產生的 `feed.json`，
+在手機上做規模換算、範圍加總與卜瓦松機率。這個資料夾負責「把模型輸出變成 feed.json」。
 
-| 分頁 | 固定 | 看什麼 |
-|---|---|---|
-| 🗺️ 規模＋時間 → 看地點 | 規模門檻 m、時間長度 T | 每一格（0.2°）的機率地圖，疊上發布前 30 天的地震 |
-| 📈 地點＋時間 → 看規模 | 範圍、T | 機率隨規模門檻的曲線；反查「機率 50%／10%／1% 對應的規模」 |
-| ⏱️ 地點＋規模 → 看時間 | 範圍、m | 機率隨時間長度（1 小時～30 天）的曲線 |
-| 🔍 可信度與限制 | — | 回測表（AUC、預測÷實際）與已知限制 |
+```mermaid
+flowchart LR
+  P[06_hazard_model.py<br>v1.1 參數與最新一期] --> S[scripts/export_app_snapshot.py]
+  S --> D[app/data/ 快照<br>約 0.7 MB，進 git]
+  D --> L[app/live_update.py<br>抓 CWA 有感報告、USGS<br>累積、去重、重算到整點]
+  L --> E[app/export_feed.py<br>轉成 feed.json 並檢查格式]
+  E --> F[feed 分支 feed.json]
+  F --> A[手機 APP<br>src/data/feed.ts 再驗證一次]
+```
 
-範圍有三種：**點震源**（圓心＋半徑）、**線震源**（折線＋兩側寬度）、**全區**。
+| 檔案 | 用途 |
+|---|---|
+| `data/` | 快照：參數（`params.json`）、每格期望數、回測表、M≥3.5 基礎目錄、近期地震。用 `scripts/export_app_snapshot.py` 從 `pipeline/data/hazard/` 產生 |
+| `hazard_core.py` | 計算核心（和 APP 的 `src/core/hazard.ts` 對應）；`background_rescale` 定義「平常」 |
+| `live_update.py` | 正式目錄之後的暫時資料：CWA 有感報告（需 `CWA_API_KEY`）＋ USGS；同參數重算到整點；評估缺口造成的低估 |
+| `export_feed.py` | 轉成 feed.json，寫出前用 `check_feed` 檢查（和手機端 `validateFeed` 相同的重點） |
+
+## 每小時自動更新
+
+`.github/workflows/hourly-feed.yml` 每小時第 17 分執行，結果推到 **`feed` 分支**（只保留最新的一個 commit），
+APP 讀 `https://raw.githubusercontent.com/<repo>/feed/feed.json`。需要在 repo 的
+Settings → Secrets and variables → Actions 設定 `CWA_API_KEY`；沒設時只用 USGS（M4 以上）。
+
+## 本機執行
+
+```bash
+python scripts/export_app_snapshot.py
+```
+
+```bash
+python app/live_update.py
+```
+
+```bash
+python app/export_feed.py
+```
+
+第一行在重新訓練模型（`06_hazard_model.py`）之後執行；後兩行產生 `app/live/` 與 `app/feed/feed.json`（不進 git）。
 
 ## 為什麼這樣設計
 
-- **每個機率旁邊都有「平常時期」**：單看「2.2%」無法判斷高低。「平常」是只用長期背景的模型
-  （這裡過去平均多常地震），和「現在」並排，聽眾才分辨得出模型帶來的資訊。
-- **不確定的地方直接提醒**：規模低於 M3.5（目錄不完整，外推）、M6.5 以上（樣本極少）、
-  回測中系統性高估的組合（例如 1 天、M6），畫面會跳出黃色提醒。
-- **計算與畫面分開**：`hazard_core.py` 不依賴 Streamlit，單元測試在 `pipeline/tests/test_app_core.py`，
-  CI 會一起跑。
-- **APP 讀小快照、不讀 E 槽**：`app/data/` 只有約 0.2 MB 的 CSV／JSON，可以放進 git，
-  任何電腦或雲端部署都能直接開。
-
-## 計算方式
-
-```
-N_ref(格, T)   快照提供 10 個時間長度的期望地震數（M≥3.5，已依回測校準）；中間值用 log–log 內插
-N(格, T, ≥m)   = N_ref × 10^(−b (m − 3.5))            古騰堡–芮克特規模分布
-N(範圍)        = Σ 格 N(格) × 該格落在範圍內的面積比例    每格切 10×10 個點估計
-P(範圍)        = 1 − exp(−N(範圍))                     卜瓦松：至少發生一次
-```
-
-「平常」用的是只有背景時單獨擬合的倍率（`fit_info.mu_bg_only`）。完整模型裡的背景倍率較小，
-因為近期加成分走了一部分地震，直接拿來當「平常」會讓每個地方都看起來偏高約 2 倍。
-
-模型本身見 `pipeline/src/eqforecast/hazard.py` 與 `docs/reports/hazard_v1/README.md`。
-
-## 執行
-
-```bash
-pip install -r app/requirements.txt
-streamlit run app/streamlit_app.py
-```
-
-地圖底圖（Carto）需要網路；沒有網路時機率格子仍會顯示，只是沒有海岸線。
-
-## 即時更新（「更新到現在」）
-
-正式目錄（GDMS）要登入下載、約落後一個半月。側欄的 **🔄 更新到現在**（或 `python app/live_update.py`）會：
-
-1. 抓**目錄結束之後**的地震：CWA 有感地震報告（E-A0015-001、E-A0016-001，需環境變數 `CWA_API_KEY`）與 USGS FDSN。
-   CWA API 只留最新 16 筆，所以每次抓到的都累積進 `app/live/provisional_events.csv`；兩邊重複的事件
-   （≤10 秒且 ≤75 km）以 CWA 為準（同樣是 ML）。
-2. 用**同一組參數**和正式目錄期間的校準倍率，重算發布時間＝現在（整點）的機率，輸出到 `app/live/`。
-   APP 會自動改用比正式快照新的即時版。
-3. **量化缺口**：暫時資料的小地震不完整，近期加成會偏低。在正式目錄期間模擬「最後 N 天只剩 M4 以上」，
-   算出總數會被低估多少，顯示在畫面上（例：缺 47 天時，7 天的總數最多低估約 13%）。不拿來修正數字，
-   因為 CWA 有感報告其實補到了一部分 M4 以下，直接修正會過度補償。
-
-為什麼不直接重抓 GDMS：GDMS 的下載介面需要會員登入、背後是未公開的內部端點，自動化不穩，
-也有使用條款的疑慮（見 `docs/phase2/data_source_comparison.md`）。正式目錄仍以手動下載為準。
-
-驗證：`pipeline/tests/test_live_update.py` 確認用快照目錄重算能重現原模型輸出（相對誤差 < 1e-4），
-並用假的抓取函式測試累積、去重、斷線時的錯誤訊息。
-
-## 更新正式資料
-
-手動下載新的 GDMS 目錄 → `01_build_catalog.py` → `06_hazard_model.py` 之後：
-
-```bash
-python scripts/export_app_snapshot.py --hazard-dir pipeline/data/hazard --events pipeline/data/events.parquet --out app/data
-```
-
-## 限制
-
-- **不是地震預報**。「更新到現在」之後的近期資料是暫時的，小地震不完整（見上）。
-- 預報的是全部地震（含餘震），技巧主要來自「大地震後會有餘震」。
-- 地磁前兆經置換檢定沒有找到證據（`docs/reports/hazard_precursor_mag/`），所以 APP 沒有使用。
-- 網格只涵蓋 21–26°N、119–123°E；外海事件因測站包覆角篩選而偏少。
+- **手機端計算**：後端只給每格的期望數（約 120 KB），任意規模、時間、範圍都在手機上算，伺服器零成本。
+- **兩道檢查**：發布前 `check_feed`、手機端 `validateFeed`。每小時自動發布，壞掉的資料不能直接送到使用者手機。
+- **事件母體與模型一致**：快照的基礎目錄和擬合參數時一樣，只用定位良好的事件（`params.json` 的 `event_quality`）。

@@ -27,6 +27,7 @@ from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import safe_console  # noqa: E402,F401  Windows cp950 終端機遇到 ⚠、≥ 等字元時不會中斷
 import blas_threads  # noqa: E402,F401  必須在 pandas／numpy 之前：每個程序只用 1 條運算執行緒
 
 import pandas as pd  # noqa: E402

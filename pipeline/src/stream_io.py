@@ -32,6 +32,8 @@ import shutil
 import tarfile
 import zipfile
 import zlib
+
+import safe_console  # noqa: F401  呼叫 stream_io 的程式在 Windows cp950 終端機上印出 ⚠、✗ 時不會中斷
 from collections import deque
 from pathlib import Path
 

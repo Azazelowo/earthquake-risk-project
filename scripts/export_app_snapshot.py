@@ -18,9 +18,14 @@
 import argparse
 import json
 import shutil
+import sys
 from pathlib import Path
 
 import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pipeline" / "src"))
+import safe_console  # noqa: E402,F401
+from eqforecast import hazard as hz  # noqa: E402
 
 
 def main():
@@ -46,9 +51,12 @@ def main():
     ev["time"] = pd.to_datetime(ev["time"])
     g = params["grid"]
     m_ref = float(params["params"]["m_ref"])
-    # 即時更新（app/live_update.py）要在任意時間重算發生率，需要完整的 M≥m_ref 目錄（背景項用整段歷史）
-    in_grid = ev["lat"].between(g["lat_min"], g["lat_max"]) & ev["lon"].between(g["lon_min"], g["lon_max"])
-    base = ev[in_grid & (ev["ml"] >= m_ref) & (ev["time"] < issue)].sort_values("time")
+    # 即時更新（app/live_update.py）要在任意時間重算發生率，需要完整的 M≥m_ref 目錄（背景項用整段歷史）。
+    # 必須和擬合參數時的事件母體相同（審查 M1），否則即時版的發生率和回測過的模型不是同一個東西。
+    quality = params.get("event_quality", {}).get("quality", "all")
+    model_ev, _ = hz.load_events(args.events, quality)
+    in_grid = model_ev["lat"].between(g["lat_min"], g["lat_max"]) & model_ev["lon"].between(g["lon_min"], g["lon_max"])
+    base = model_ev[in_grid & (model_ev["ml"] >= m_ref) & (model_ev["time"] < issue)].sort_values("time")
     base[["time", "lat", "lon", "ml"]].to_csv(out / "catalog_base.csv", index=False, float_format="%.4f",
                                               date_format="%Y-%m-%d %H:%M:%S")
     catalog_end = ev.loc[ev["time"] < issue, "time"].max()
@@ -60,7 +68,7 @@ def main():
 
     params["snapshot"] = {"exported_from": str(src).replace("\\", "/"), "recent_events_days": args.event_days,
                           "recent_events_min_ml": args.event_min_ml, "n_recent_events": int(len(ev)),
-                          "n_catalog_base": int(len(base))}
+                          "n_catalog_base": int(len(base)), "event_quality": quality}
     params["catalog_end"] = str(catalog_end)
     params["data_status"] = {"mode": "base", "catalog_end": str(catalog_end)}
     (out / "params.json").write_text(json.dumps(params, ensure_ascii=False, indent=1), encoding="utf-8")

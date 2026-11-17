@@ -165,5 +165,74 @@ class FitTest(unittest.TestCase):
         self.assertGreaterEqual(info["ll_full"], info["ll_bg_only"] - 1e-6)
 
 
+class EventPopulationTest(unittest.TestCase):
+    """審查 M1：events.parquet 的兩種母體混用會壓低 b 值；load_events 預設只用定位良好的事件。"""
+
+    @staticmethod
+    def _mixed_catalog(seed=21, n=40000, b=1.0, keep_small=0.4):
+        ev = synthetic(n=n, b=b, seed=seed)
+        rng = np.random.default_rng(seed + 1)
+        located = rng.random(len(ev)) < keep_small            # 定位品質好與否和規模無關（例如外海）
+        is_target = ev["ml"] >= 5.5
+        return ev.assign(use_for_features=located, is_target=is_target)[located | is_target]
+
+    def test_mixing_populations_biases_b_low_and_located_only_recovers_it(self):
+        ev = self._mixed_catalog()
+        b_mixed = hz.estimate_b(ev["ml"], 3.5)
+        b_located = hz.estimate_b(ev.loc[ev["use_for_features"], "ml"], 3.5)
+        self.assertAlmostEqual(b_located, 1.0, delta=0.04)
+        self.assertLess(b_mixed, b_located - 0.01)            # 大地震被人為放大 → b 偏低
+
+    def test_load_events_filters_and_reports_counts(self):
+        import tempfile
+        ev = self._mixed_catalog(n=5000)
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "events.parquet"
+            ev.to_parquet(path, index=False)
+            located, info = hz.load_events(path)
+            self.assertEqual(info["quality"], "located")
+            self.assertEqual(info["n_used"], int(ev["use_for_features"].sum()))
+            self.assertEqual(info["n_all"], len(ev))
+            self.assertEqual(list(located.columns), ["time", "lat", "lon", "ml"])
+            self.assertEqual(pd.Timestamp(info["time_max"]), ev["time"].max())   # 發布時間以篩選前為準
+            everything, info_all = hz.load_events(path, "all")
+            self.assertEqual(len(everything), len(ev))
+            self.assertRaises(ValueError, hz.load_events, path, "bogus")
+            ev.drop(columns=["use_for_features"]).to_parquet(path, index=False)
+            self.assertRaises(ValueError, hz.load_events, path)                 # 舊檔沒有旗標：要求明確選擇
+            self.assertEqual(len(hz.load_events(path, "all")[0]), len(ev))
+
+
+class SearchTest(unittest.TestCase):
+    """審查 M3：fit_mu_k 的快速寫法和原本的概似相同；最佳值落在邊界要被標出來。"""
+
+    def test_fast_objective_matches_full_poisson_likelihood(self):
+        rng = np.random.default_rng(12)
+        bg = rng.uniform(0.0, 0.05, (300, 50))
+        st = rng.exponential(0.2, (300, 50)) * (rng.random((300, 50)) < 0.05)
+        obs = rng.poisson(0.8 * bg + 0.5 * st)
+        mu, k, ll = hz.fit_mu_k(obs, bg, st)
+        self.assertAlmostEqual(ll, hz.poisson_ll(obs, mu * bg + k * st), places=6)
+        for dm, dk in ((1.05, 1.0), (0.95, 1.0), (1.0, 1.1), (1.0, 0.9)):     # 確實是最大值
+            self.assertGreater(ll, hz.poisson_ll(obs, mu * dm * bg + k * dk * st))
+
+    def test_boundary_hits(self):
+        grids = {"alpha": (0.0, 0.5, 1.0), "p": (0.8, 1.0, 1.2), "sigma_bg": (1.0,)}
+        hits = hz.boundary_hits({"alpha": 0.0, "p": 1.2, "sigma_bg": 1.0}, grids)
+        self.assertEqual(hits, [("alpha", 0.0, "下限"), ("p", 1.2, "上限")])     # 單一候選值不檢查
+        self.assertEqual(hz.boundary_hits({"alpha": 0.5, "p": 1.0, "sigma_bg": 1.0}, grids), [])
+
+    def test_default_grid_extends_v1_range_and_fit_reports_it(self):
+        self.assertLess(min(hz.ALPHAS), 0.2)
+        self.assertLess(min(hz.PS), 0.8)
+        self.assertLess(min(hz.SIGMAS_BG), 0.5)
+        ev = synthetic(n=3000, seed=13)
+        _, log, info = hz.fit(ev, GRID, "2005-01-01", "2015-01-01", alphas=(0.4, 0.8), ps=(1.1,),
+                              sigmas_st=(0.5,), sigmas_bg=(1.0,))
+        self.assertEqual(len(log), 2)
+        self.assertEqual(info["search_grid"]["alpha"], [0.4, 0.8])
+        self.assertTrue(all(h[0] == "alpha" for h in info["boundary_hits"]))   # 只有 alpha 有兩個候選值
+
+
 if __name__ == "__main__":
     unittest.main()

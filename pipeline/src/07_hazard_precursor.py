@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import safe_console  # noqa: E402,F401  Windows cp950 終端機遇到 ⚠、≥ 等字元時不會中斷
 from eqforecast import hazard as hz  # noqa: E402
 from eqforecast import modifier as md  # noqa: E402
 

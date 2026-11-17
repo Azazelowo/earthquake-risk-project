@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import safe_console  # noqa: E402,F401  Windows cp950 終端機遇到 ⚠、≥ 等字元時不會中斷
 from eqforecast import metrics as M  # noqa: E402
 
 BASE_DIR = Path(__file__).resolve().parents[2]

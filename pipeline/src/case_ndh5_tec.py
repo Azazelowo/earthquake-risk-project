@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import safe_console  # noqa: E402,F401  Windows cp950 終端機遇到 ⚠、≥ 等字元時不會中斷
 from eqforecast.decluster import haversine_km  # noqa: E402
 from gnss_tec import aux_data, orbit, rinex, tec  # noqa: E402
 

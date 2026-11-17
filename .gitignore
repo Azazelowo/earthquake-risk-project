@@ -96,3 +96,7 @@ venv/
 
 # Phase 2 第 1 層原始資料（USGS 原始 CSV 等），僅存在本機，不進版控
 earthquake_data/
+
+# APP 即時更新與 feed 的本機輸出（GitHub Actions 會把正式版推到 feed 分支）
+app/live/
+app/feed/

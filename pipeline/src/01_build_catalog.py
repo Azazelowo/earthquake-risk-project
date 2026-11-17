@@ -25,8 +25,12 @@
 - 輸出寫到專案根目錄的 pipeline/data/。
 """
 import os
-from pathlib import Path
+import sys
 import xml.etree.ElementTree as ET
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import safe_console  # noqa: E402,F401  Windows cp950 終端機遇到 ⚠、≥ 等字元時不會中斷
 
 import numpy as np
 import pandas as pd

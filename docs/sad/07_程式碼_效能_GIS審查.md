@@ -18,7 +18,7 @@
 
 | # | 類別 | 檔案 | 函式 | 行號 | 原因 | 改善方式 |
 |---|---|---|---|---|---|---|
-| C1 | 邏輯錯誤 | `pipeline/src/01_build_catalog.py`、`06_hazard_model.py`、`eqforecast/hazard.py` | `main`、`Catalog.__init__` | 01:251-254；06:198；hazard:82 | `events.parquet` 是「gap ≤ 110° 的事件」加上「ML ≥ 5.5 不論 gap」的聯集，風險模型卻全部拿來用。大地震的比例被放大，b 值偏低（0.775）【需確認：本機沒有 events.parquet，無法實測】 | 06 讀檔時加讀 `use_for_features`，只用 `use_for_features == True` 的事件。修正後比較新舊 b 值（**本輪稍後會實作**） |
+| C1 | 邏輯錯誤 | `pipeline/src/01_build_catalog.py`、`06_hazard_model.py`、`eqforecast/hazard.py` | `main`、`Catalog.__init__` | 01:251-254；06:198；hazard:82 | `events.parquet` 是「gap ≤ 110° 的事件」加上「ML ≥ 5.5 不論 gap」的聯集，風險模型卻全部拿來用。大地震的比例被放大，b 值偏低【實測：訓練期混用時 b＝0.775，只用定位良好的事件時 b＝0.844；191 筆 M≥5.5 裡有 127 筆 gap > 110°】 | 06 讀檔時加讀 `use_for_features`，只用 `use_for_features == True` 的事件。**已修正**（commit b67f272：`hazard.load_events` 預設只用 `use_for_features`） |
 
 ### High
 
@@ -27,9 +27,9 @@
 | H1 | 資安（未來） | APP `src/ui/expert.ts` | `viewVerify`、`viewMore` | 265、279 | `data_status.sources`、`recent[].source`、`depth_km` **沒有經過 `esc()`** 就放進 `innerHTML`。TypeScript 的型別（`"GDMS"\|"CWA"\|"USGS"`）只在編譯時檢查，Phase 2 的 feed.json 是外部資料，執行時不受限制 | 一律加上 `esc()`；數字欄位用 `Number()` 轉換後再輸出 |
 | H2 | 錯誤處理 | APP `src/data/schema.ts`（整體） | — | 4-23 | feed.json **沒有執行時的格式驗證**。欄位缺少或型別錯誤時，畫面會在任意位置拋出例外 | 載入時用一個 `validateFeed()` 檢查版本、陣列長度、數值範圍；失敗就退回「資料暫時無法使用」 |
 | H3 | 錯誤處理 | APP `src/core/hazard.ts`、`src/main.ts` | `interpHorizon`、`render` | hazard:12；main:69 | T 超出 1 小時到 30 天時，`interpHorizon` 直接丟出例外，而 `render` 沒有攔截，整頁空白（狀態事件 S-13） | `render` 外面包一層 try/catch，失敗時退回預設條件；`sanitize` 限制 T 的範圍（`state.ts:87`） |
-| H4 | 邏輯（統計） | `06_hazard_model.py` | `backtest` | 80 | 均勻對照沒有做滾動校準，「增益（對均勻）」被高估 | 均勻對照也乘上同一套校準倍率（**本輪稍後會實作**） |
-| H5 | 邏輯（統計） | `eqforecast/hazard.py` | `fit` | 232-234 | alpha、p、sigma_bg 的最佳值都落在搜尋範圍的下限 | 放寬搜尋範圍（**本輪稍後會實作**） |
-| H6 | 錯誤處理（跨平台） | `pipeline/src/stream_io.py`、`02_clean_features.py` | `print` | stream_io:198, 257；02:371, 373 | `⚠`、`✗` 等符號在 Windows cp950 終端機會丟出 `UnicodeEncodeError`，**程式中斷**【實測：4 個測試失敗】 | 入口統一把 stdout 設成 UTF-8（**本輪稍後會實作**） |
+| H4 | 邏輯（統計） | `06_hazard_model.py` | `backtest` | 80 | 均勻對照沒有做滾動校準，「增益（對均勻）」被高估 | **已修正**（commit b67f272） |
+| H5 | 邏輯（統計） | `eqforecast/hazard.py` | `fit` | 232-234 | alpha、p、sigma_bg 的最佳值都落在搜尋範圍的下限 | **部分解決**（commit b67f272：放寬到 768 組並自動標出邊界；重跑後 p、sigma_bg 離開邊界，但 alpha 落在物理下限 0，屬於模型形式問題，見 11 第 5 節） |
+| H6 | 錯誤處理（跨平台） | `pipeline/src/stream_io.py`、`02_clean_features.py` | `print` | stream_io:198, 257；02:371, 373 | `⚠`、`✗` 等符號在 Windows cp950 終端機會丟出 `UnicodeEncodeError`，**程式中斷**【實測：4 個測試失敗】 | **已修正**（commit 0ac4cfc：`safe_console`，cp950 下 148 個測試全部通過） |
 | H7 | 邏輯（領域） | APP `src/state.ts`、`src/core/hazard.ts` | `MAGS`、`scaleMagnitude` | state:59；hazard:27 | M7 是用 b＝0.775 從 M3.5 外推 3.5 級；而且 ML 在大地震時會飽和 | 修正 C1 後重估 b；M ≥ 6.5 改成只顯示量級 |
 
 ### Medium
@@ -85,7 +85,7 @@
 |---|---|---|---|---|---|
 | 1 | Python 管線 | `hazard.py:162-179` | 每一期發布要重算約 104 次 `expected_ref`（730 天 ÷ 7 天），匯出 10 個時間長度就是約 1,040 次 | 快取每週的總數，增量更新 | 匯出時間約降 1–2 個數量級 |
 | 2 | Python 管線 | `06_hazard_model.py:69-72` | 回測時每個時間長度都重算整串校準窗 | 同 1 | 回測時間大幅縮短 |
-| 3 | Python 管線 | `hazard.py:249-256` | 75 組格點搜尋，每組都重算全部訓練窗的 `short_term` | 先依 (alpha, p) 算好未平滑的量，再分別平滑 | 約 3 倍 |
+| 3 | Python 管線 | `hazard.py:249-256` | v1 有 225 組格點（`short_term` 要對全部訓練窗重算 75 次）；v1.1 放寬成 768 組（重算 192 次） | 先依 (alpha, p) 算好未平滑的量，再分別平滑 | 約 3 倍 |
 | 4 | Python 管線 | `01_build_catalog.py:260` | `df["gap"].apply(gap_quality)` 逐列套用 | 改用 `pd.cut` 向量化 | 十萬筆時約 10–100 倍（實際只占幾秒） |
 | 5 | Python 管線 | `01_build_catalog.py:116-123` | 用字串格式化產生事件 ID | 可以接受 | — |
 | 6 | TS 計算 | `public.ts:21, 60` | 首頁的狀態和 3 張情境卡，對**同一組**（位置、半徑）重複計算 `pointWeights` 4 次（每次 100 個子點 × 範圍內的格子） | 依（lat、lon、半徑）快取權重 | 首頁計算量約減少 75% |

@@ -19,12 +19,22 @@ flowchart LR
 | `hazard_core.py` | 計算核心（和 APP 的 `src/core/hazard.ts` 對應）；`background_rescale` 定義「平常」 |
 | `live_update.py` | 正式目錄之後的暫時資料：CWA 有感報告（需 `CWA_API_KEY`）＋ USGS；同參數重算到最近的 15 分鐘；評估缺口造成的低估 |
 | `export_feed.py` | 轉成 feed.json，寫出前用 `check_feed` 檢查（和手機端 `validateFeed` 相同的重點） |
+| `export_history.py` | 歷史回放（APP Phase 5）：重算過去大地震前後「當時」的 feed（只用每個時間點之前的資料，校準倍率也是），輸出到 APP 的 `public/history/`。需要完整目錄 `pipeline/data/events.parquet`（列表的地震與深度） |
+| `state_frequency.py` | 狀態門檻的回測統計：測試期每天、20 個縣市、APP 預設條件下各狀態出現的頻率 → `docs/reports/state_frequency.md` |
 
 ## 每 15 分鐘自動更新
 
 `.github/workflows/hourly-feed.yml` 每小時第 7、22、37、52 分執行，結果推到 **`feed` 分支**（只保留最新的一個 commit），
 APP 讀 `https://raw.githubusercontent.com/<repo>/feed/feed.json`。需要在 repo 的
 Settings → Secrets and variables → Actions 設定 `CWA_API_KEY`；沒設時只用 USGS（M4 以上）。
+
+**實際由外部服務觸發（2026-11-18 起）**：GitHub 內建排程實測不可靠（上線後數小時一次都沒自動執行，同 repo 其他排程也晚 3～9 小時），
+所以由使用者在 cron-job.org 設定每 15 分鐘呼叫 GitHub 的 `workflow_dispatch` API（`hourly-feed.yml`、ref `main`）。
+權杖是使用者自建的 fine-grained token：只限這個 repo、只有 Actions 讀寫，不在任何 repo 裡。工作流程內的 cron 保留當備援，
+兩邊同時觸發會依序執行（`concurrency`），結果相同。
+
+**會讓更新停掉的事**：工作流程改檔名或拿掉 `workflow_dispatch`；權杖到期（到時重建並換到 cron-job.org）；cron-job.org 停用這個工作。
+發生時 APP 會在 1 小時後顯示「資料已過期」。
 
 ## 本機執行
 

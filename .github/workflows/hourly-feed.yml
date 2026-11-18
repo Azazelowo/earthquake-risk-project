@@ -8,6 +8,10 @@
 #   一年會讓 repo 多出數 GB。分支上只需要最新狀態，加上累積的暫時資料（CWA API 只保留最新 16 筆，
 #   漏抓的補不回來，所以 provisional_events.csv 一定要留著）。
 # 需要的 Secret：CWA_API_KEY（沒設也能跑，只用 USGS 的 M4 以上，feed 的資料狀態會註明）。
+#
+# 實際的觸發（2026-11-18 起）：GitHub 內建排程實測不可靠，改由外部服務（cron-job.org）每 15 分鐘呼叫
+#   workflow_dispatch（這個檔案、ref main）；下面的 schedule 只當備援。改這個檔案的檔名、或拿掉 workflow_dispatch，
+#   更新就會停掉（APP 1 小時後顯示「資料已過期」）。說明見 app/README.md。
 name: Feed update
 
 on:

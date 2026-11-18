@@ -119,9 +119,16 @@ class TestRecompute(unittest.TestCase):
             self.assertEqual(snap.issue_time, pd.Timestamp("2026-11-15 04:00"))
             self.assertTrue((snap.events["source"] == "USGS（暫時）").any())
             self.assertIsNotNone(hc.gap_ratio_at(snap.params, 7))
-            # 再跑一次（離線）不會重複累積
+            # 抓取紀錄：一次成功的抓取一列，CWA 單一資料集回了 1 筆
+            log = lu.read_fetch_log(live / "fetch_log.csv")
+            self.assertEqual(len(log), 1)
+            self.assertTrue(bool(log["usgs_ok"].iloc[0]) and bool(log["cwa_ok"].iloc[0]))
+            self.assertEqual(int(log["cwa_max_n"].iloc[0]), 1)
+            self.assertEqual(log["fetched_at"].iloc[0], pd.Timestamp("2026-11-15 04:20:00"))
+            # 再跑一次（離線）不會重複累積，也不會多記一次抓取
             lu.update(now="2026-11-15 04:20", base_dir=BASE, live_dir=live, network=False, log=lambda *_: None)
             self.assertEqual(len(lu.read_store(live / "provisional_events.csv")), 3)
+            self.assertEqual(len(lu.read_fetch_log(live / "fetch_log.csv")), 1)
 
     def test_network_failure_is_reported_not_raised(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -131,6 +138,10 @@ class TestRecompute(unittest.TestCase):
                                fetch_usgs_fn=boom, fetch_cwa_fn=boom)
             self.assertTrue(any("USGS" in e for e in status["errors"]))
             self.assertTrue(any("CWA_API_KEY" in e for e in status["errors"]))
+            log = lu.read_fetch_log(Path(tmp) / "fetch_log.csv")                 # 失敗的抓取也要記，才看得出缺口
+            self.assertEqual(len(log), 1)
+            self.assertFalse(bool(log["usgs_ok"].iloc[0]) or bool(log["cwa_ok"].iloc[0]))
+            self.assertIsNone(lu.read_fetch_log(Path(tmp) / "nope.csv"))
 
     def test_base_is_used_when_no_live(self):
         with tempfile.TemporaryDirectory() as tmp:

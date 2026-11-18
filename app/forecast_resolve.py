@@ -42,6 +42,7 @@ STAGE_SPEED, STAGE_FINAL = "speed", "final"
 STAGE_NAMES = {STAGE_SPEED: "速判", STAGE_FINAL: "定判"}
 SPEED_DELAY_DAYS = 1.0             # 速判：視窗結束後多久
 MAX_FETCH_GAP_H = 3.0              # 視窗內暫時目錄的抓取間隔超過這麼久，標「可能漏事件」
+CWA_CAP = 16                       # CWA API 每個資料集只回最新 16 筆（與 live_update.CWA_CAP 相同）
 GRID_BOUNDS = {"lat_min": 21.0, "lat_max": 26.0, "lon_min": 119.0, "lon_max": 123.0}   # 「all」區域 = 整個網格
 
 # 模型狀態門檻（規格 §6.5，使用者 2026-11-18 接受；第一張標準卡發布後不得調整，要調整只能升級規格版本）
@@ -78,12 +79,27 @@ def resolve_card(card, header, events):
             "events": [{"time": fc.iso(r.time), "ml": round(float(r.ml), 2)} for r in top.itertuples()]}
 
 
-def fetch_gap_hours(fetched_at, t0, t1):
-    """暫時目錄在 [t0, t1] 內，相鄰兩次抓取的最大間隔（小時）。資料不到頭尾時，頭尾也算間隔。"""
-    ts = sorted(pd.to_datetime(fetched_at).dropna().unique())
+def fetch_gap_hours(times, t0, t1):
+    """[t0, t1] 內，相鄰兩次抓取的最大間隔（小時）。第一次抓取之前、最後一次之後也算間隔。"""
+    ts = sorted(pd.to_datetime(pd.Series(list(times))).dropna().unique())
     pts = [t for t in ts if t0 <= pd.Timestamp(t) <= t1]
     marks = [t0] + [pd.Timestamp(t) for t in pts] + [t1]
     return max((b - a) / pd.Timedelta(hours=1) for a, b in zip(marks, marks[1:]))
+
+
+def speed_coverage(fetch_log, t0, t1):
+    """速判的資料完整度：視窗內「USGS 與 CWA 都成功」的抓取是否連續，以及有沒有抓到 CWA 的回傳上限。
+
+    抓取紀錄是 live_update 每次抓取寫的（不是暫時事件裡的 fetched_at：那只是事件最後一次被看到的時間）。
+    沒有紀錄、間隔超過 MAX_FETCH_GAP_H、或視窗內有一次回傳數達上限（更早的報告可能被擠掉），都標 maybe_missing。
+    """
+    if fetch_log is None or not len(fetch_log):
+        return {"fetch_gap_h": None, "cap_hits": None, "maybe_missing": True}
+    win = fetch_log[(fetch_log["fetched_at"] >= t0) & (fetch_log["fetched_at"] <= t1)]
+    good = fetch_log[fetch_log["usgs_ok"] & fetch_log["cwa_ok"]]
+    gap = fetch_gap_hours(good["fetched_at"], t0, t1)
+    cap = int((win["cwa_max_n"] >= CWA_CAP).sum())
+    return {"fetch_gap_h": round(float(gap), 2), "cap_hits": cap, "maybe_missing": bool(gap > MAX_FETCH_GAP_H or cap > 0)}
 
 
 def pending_cards(registry_dir, results_dir, stage):
@@ -99,7 +115,7 @@ def pending_cards(registry_dir, results_dir, stage):
     return out
 
 
-def resolve_pending(registry_dir, results_dir, stage, events, covered_until, now, fetched_at=None, catalog_note=""):
+def resolve_pending(registry_dir, results_dir, stage, events, covered_until, now, fetch_log=None, catalog_note=""):
     """把到期、尚未裁決的卡裁決掉並寫進紀錄。回傳寫入的筆數。
 
     covered_until：這份目錄涵蓋到哪一刻。定判要求視窗結束 ≤ covered_until；速判要求
@@ -118,9 +134,7 @@ def resolve_pending(registry_dir, results_dir, stage, events, covered_until, now
         r = resolve_card(card, header, events)
         row = {"id": f"{card['id']}|{stage}", "card": card["id"], "stage": stage, **r}
         if stage == STAGE_SPEED:
-            gap = fetch_gap_hours(fetched_at, t0, t1) if fetched_at is not None else None
-            row["fetch_gap_h"] = None if gap is None else round(float(gap), 2)
-            row["maybe_missing"] = gap is None or gap > MAX_FETCH_GAP_H
+            row.update(speed_coverage(fetch_log, t0, t1))
         rows.append(row)
     if not rows:
         return 0
@@ -254,8 +268,16 @@ def score_groups(resolved, as_of, keys=("r", "m", "T")):
 
 # ---------- 入口 ----------
 
-def _speed_events(base_dir, provisional_path):
-    """速判用的事件：基準目錄（正式、定位良好）＋暫時目錄（CWA＋USGS，CWA 優先）。回傳 (events, fetched_at, covered_until)。"""
+def _json_default(o):
+    """numpy 的整數、浮點數、布林轉成一般型別；其餘轉成字串。"""
+    return o.item() if hasattr(o, "item") else str(o)
+
+
+def _speed_events(base_dir, provisional_path, fetch_log_path):
+    """速判用的事件：基準目錄（正式、定位良好）＋暫時目錄（CWA＋USGS，CWA 優先）。
+
+    回傳 (events, 抓取紀錄, 涵蓋到哪一刻)。涵蓋時間＝最後一次「USGS 與 CWA 都成功」的抓取。
+    """
     import live_update as lu                                    # 延後匯入：只有速判需要
     base = lu.read_base_catalog(base_dir)[["time", "lat", "lon", "ml"]]
     prov = lu.read_store(provisional_path)
@@ -263,8 +285,10 @@ def _speed_events(base_dir, provisional_path):
     cols = ["time", "lat", "lon", "ml"]
     ev = pd.concat([base] + ([merged[cols]] if len(merged) else []), ignore_index=True)
     ev["time"] = pd.to_datetime(ev["time"])
-    covered = pd.to_datetime(prov["fetched_at"]).max() if len(prov) else pd.NaT
-    return ev, (prov["fetched_at"] if len(prov) else None), covered
+    log = lu.read_fetch_log(fetch_log_path)
+    good = log[log["usgs_ok"] & log["cwa_ok"]] if log is not None else None
+    covered = good["fetched_at"].max() if good is not None and len(good) else pd.NaT
+    return ev, log, covered
 
 
 def main():
@@ -278,10 +302,13 @@ def main():
     r = sub.choices["resolve"]
     r.add_argument("--base", default=str(APP_DIR / "data"))
     r.add_argument("--provisional", default=str(APP_DIR / "live" / "provisional_events.csv"))
+    r.add_argument("--fetch-log", default=str(APP_DIR / "live" / "fetch_log.csv"),
+                   help="live_update 每次抓取寫的紀錄；速判靠它判斷視窗內有沒有連續抓取")
     r.add_argument("--formal", default=None, help="定判：GDMS 正式目錄 events.parquet")
     r.add_argument("--now", default=None)
     s = sub.choices["score"]
     s.add_argument("--as-of", default=None)
+    s.add_argument("--out", default=None, help="把完整計分結果（每組的評估與狀態）寫成 JSON")
     args = ap.parse_args()
 
     if args.cmd == "resolve":
@@ -295,10 +322,10 @@ def main():
             n = resolve_pending(args.registry, args.results, args.stage, ev, covered, now,
                                 catalog_note=f"GDMS 正式目錄（定位良好）：{args.formal}")
         else:
-            ev, fetched, covered = _speed_events(args.base, args.provisional)
+            ev, log, covered = _speed_events(args.base, args.provisional, args.fetch_log)
             if pd.isna(covered):
-                sys.exit("暫時目錄是空的，無法速判")
-            n = resolve_pending(args.registry, args.results, args.stage, ev, covered, now, fetched_at=fetched,
+                sys.exit("沒有成功的抓取紀錄（fetch_log.csv），無法速判")
+            n = resolve_pending(args.registry, args.results, args.stage, ev, covered, now, fetch_log=log,
                                 catalog_note="暫時目錄（CWA 有感報告累積檔＋USGS）；母體未篩定位品質，可能漏事件")
         print(f"{STAGE_NAMES[args.stage]}：裁決 {n} 張卡")
         return
@@ -306,8 +333,16 @@ def main():
     as_of = pd.Timestamp.now("UTC").tz_localize(None) if args.as_of is None else pd.Timestamp(args.as_of)
     groups = score_groups(resolved, as_of)
     counts = pd.Series([g["status"] for g in groups]).value_counts().to_dict() if groups else {}
-    print(json.dumps({"stage": STAGE_NAMES[args.stage], "as_of": fc.iso(as_of), "resolved_cards": int(len(resolved)),
-                      "groups": len(groups), "status_counts": counts}, ensure_ascii=False))
+    summary = {"stage": STAGE_NAMES[args.stage], "as_of": fc.iso(as_of), "resolved_cards": int(len(resolved)),
+               "groups": len(groups), "status_counts": {k: int(v) for k, v in counts.items()}}
+    if args.out:
+        full = {**summary, "provisional": args.stage == STAGE_SPEED,
+                "note": "速判用暫時目錄，母體未篩定位品質、可能漏事件；模型狀態以定判為準" if args.stage == STAGE_SPEED else "",
+                "thresholds": {"eval_days": EVAL_DAYS, "min_events": MIN_EVENTS, "month_days": MONTH_DAYS,
+                               "ntest_alpha": NTEST_ALPHA}, "results": groups}
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(json.dumps(full, ensure_ascii=False, indent=1, default=_json_default), encoding="utf-8")
+    print(json.dumps(summary, ensure_ascii=False))
 
 
 if __name__ == "__main__":

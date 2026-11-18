@@ -78,6 +78,7 @@ python -m unittest discover -s pipeline/tests
 |---|---|
 | `hourly-feed.yml` | 每小時更新風險資料並發布 `feed.json` 到 `feed` 分支（需要 Secret `CWA_API_KEY`） |
 | `pipeline-tests.yml` | 推送與 PR 時跑單元測試 |
+| `forecast-daily.yml` | 每日發布預報卡、速判、計分，寫進 `forecasts` 分支；**預設關閉**，要設變數 `FORECAST_ISSUE_ENABLED` 才會發（見規格 §14） |
 | `daily-report-check.yml`、`fractal-archive.yml` | 每日報告缺漏檢查、碎形日報封存 |
 | `risk-assessment.yml` | 舊 PowerShell 流程的 workflow：評估 job 只能手動觸發；裡面的 tests job 仍會在推送時執行（和 `pipeline-tests.yml` 重複，審查 Q5） |
 

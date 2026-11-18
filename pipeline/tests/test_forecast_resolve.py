@@ -23,6 +23,12 @@ def events(rows):
     return pd.DataFrame(rows, columns=["time", "lat", "lon", "ml"]).assign(time=lambda d: pd.to_datetime(d["time"]))
 
 
+def fetch_log(times, cwa_max_n=5, usgs_ok=True, cwa_ok=True):
+    """live_update 的抓取紀錄（每次抓取一列）。"""
+    return pd.DataFrame({"fetched_at": pd.to_datetime(pd.Series(list(times))), "usgs_ok": usgs_ok, "cwa_ok": cwa_ok,
+                         "cwa_max_n": cwa_max_n})
+
+
 def shifted(snap, days):
     t = (snap.issue_time + np.timedelta64(days, "D")).strftime("%Y-%m-%d %H:%M:%S")
     return dataclasses.replace(snap, params={**snap.params, "issue_time": t})
@@ -104,10 +110,10 @@ class ResolvePendingTest(unittest.TestCase):
 
     def test_speed_waits_one_day_after_window_end(self):
         covered = self.t0 + pd.Timedelta(days=30)
-        fetched = pd.Series(pd.date_range(self.t0, self.t0 + pd.Timedelta(days=30), freq="1h"))
-        n = self.run_stage(fr.STAGE_SPEED, self.t0 + pd.Timedelta(days=1, hours=23), covered, fetched_at=fetched)
+        log = fetch_log(pd.date_range(self.t0, self.t0 + pd.Timedelta(days=30), freq="1h"))
+        n = self.run_stage(fr.STAGE_SPEED, self.t0 + pd.Timedelta(days=1, hours=23), covered, fetch_log=log)
         self.assertEqual(n, 0)                                                      # 1 天窗要到 T+1 天（第 2 天）
-        n = self.run_stage(fr.STAGE_SPEED, self.t0 + pd.Timedelta(days=2), covered, fetched_at=fetched)
+        n = self.run_stage(fr.STAGE_SPEED, self.t0 + pd.Timedelta(days=2), covered, fetch_log=log)
         self.assertEqual(n, 1)
 
     def test_each_card_and_stage_is_resolved_only_once_and_results_chain_verifies(self):
@@ -118,19 +124,34 @@ class ResolvePendingTest(unittest.TestCase):
         stats = fc.verify_registry(self.res)
         self.assertEqual((stats["batches"], stats["cards"]), (1, 2))
         # 同一張卡的速判與定判是兩筆不同的紀錄
-        fetched = pd.Series(pd.date_range(self.t0, self.t0 + pd.Timedelta(days=30), freq="1h"))
-        self.assertEqual(self.run_stage(fr.STAGE_SPEED, now + pd.Timedelta(days=2), covered, fetched_at=fetched), 2)
+        log = fetch_log(pd.date_range(self.t0, self.t0 + pd.Timedelta(days=30), freq="1h"))
+        self.assertEqual(self.run_stage(fr.STAGE_SPEED, now + pd.Timedelta(days=2), covered, fetch_log=log), 2)
         self.assertEqual(fc.verify_registry(self.res)["cards"], 4)
 
     def test_speed_flags_long_fetch_gaps_as_possibly_missing(self):
         covered = self.t0 + pd.Timedelta(days=30)
         hours = pd.date_range(self.t0, self.t0 + pd.Timedelta(days=30), freq="1h")
         gap = hours[(hours < self.t0 + pd.Timedelta(hours=6)) | (hours > self.t0 + pd.Timedelta(hours=12))]   # 留下 5 點與 13 點，中間 8 小時沒抓
-        self.run_stage(fr.STAGE_SPEED, self.t0 + pd.Timedelta(days=9), covered, fetched_at=pd.Series(gap))
+        self.run_stage(fr.STAGE_SPEED, self.t0 + pd.Timedelta(days=9), covered, fetch_log=fetch_log(gap))
         out = fr.load_resolved(self.reg, self.res, fr.STAGE_SPEED)
         self.assertTrue(out["maybe_missing"].all())                                 # 兩個窗都包含那段空白
         self.assertAlmostEqual(fr.fetch_gap_hours(pd.Series(gap), self.t0, self.t0 + pd.Timedelta(days=1)), 8.0, places=6)
         self.assertLess(fr.fetch_gap_hours(pd.Series(hours), self.t0, self.t0 + pd.Timedelta(days=1)), 1.01)
+
+    def test_speed_coverage_rules(self):
+        t0, t1 = self.t0, self.t0 + pd.Timedelta(days=1)
+        hours = pd.date_range(t0, t1, freq="1h")
+        ok = fr.speed_coverage(fetch_log(hours), t0, t1)
+        self.assertFalse(ok["maybe_missing"])
+        self.assertEqual(ok["cap_hits"], 0)
+        self.assertTrue(fr.speed_coverage(None, t0, t1)["maybe_missing"])                       # 沒有抓取紀錄
+        cap = fr.speed_coverage(fetch_log(hours, cwa_max_n=16), t0, t1)                         # CWA 回傳達上限
+        self.assertTrue(cap["maybe_missing"])
+        self.assertEqual(cap["cap_hits"], len(hours))
+        # 有抓取紀錄但 CWA 一直失敗（例如沒設金鑰）：不算「完整成功的抓取」，整段都是缺口
+        failed = fr.speed_coverage(fetch_log(hours, cwa_ok=False, cwa_max_n=0), t0, t1)
+        self.assertTrue(failed["maybe_missing"])
+        self.assertAlmostEqual(failed["fetch_gap_h"], 24.0)
 
     def test_results_do_not_modify_the_registry(self):
         before = fc.verify_registry(self.reg)

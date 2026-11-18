@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "app"))
@@ -85,6 +86,26 @@ class BuildTest(unittest.TestCase):
     def test_canonical_json_is_stable_under_key_order(self):
         self.assertEqual(fc.canonical({"b": 1, "a": [2, 3]}), fc.canonical({"a": [2, 3], "b": 1}))
         self.assertEqual(fc.sig(0.1 + 0.2), fc.sig(0.3))
+
+
+class LagTest(unittest.TestCase):
+    def test_late_or_future_snapshots_are_refused(self):
+        issued = pd.Timestamp("2026-11-20 00:00")
+        self.assertAlmostEqual(fc.check_lag(issued, pd.Timestamp("2026-11-20 00:20"), 2.0), 1 / 3)
+        self.assertEqual(fc.check_lag(issued, pd.Timestamp("2026-11-20 02:00"), 2.0), 2.0)      # 剛好 2 小時：允許
+        with self.assertRaisesRegex(fc.RegistryError, "今天不發"):
+            fc.check_lag(issued, pd.Timestamp("2026-11-20 02:01"), 2.0)
+        with self.assertRaisesRegex(fc.RegistryError, "晚於現在"):
+            fc.check_lag(issued, pd.Timestamp("2026-11-19 23:00"), 2.0)
+
+    def test_generated_at_is_recorded_only_when_given(self):
+        snap = hc.load_snapshot(BASE)
+        uniform, _ = fc.uniform_per_cell(BASE, snap, (7,))
+        small = dict(regions=fc.STANDARD_REGIONS[:1], mags=(4.0,), windows=(7,))
+        self.assertNotIn("generated_at", fc.build_batch(snap, uniform, **small)[0])
+        h, _ = fc.build_batch(snap, uniform, generated_at=pd.Timestamp("2026-09-30 00:20"), **small)
+        self.assertEqual(h["generated_at"], "2026-09-30T00:20:00Z")
+        self.assertEqual(h["data_status"]["errors"], [])
 
 
 class RegistryTest(unittest.TestCase):
@@ -177,9 +198,9 @@ class RegistryTest(unittest.TestCase):
     def test_duplicate_or_backdated_batch_is_refused_and_leaves_registry_intact(self):
         self.fill(self.b1, self.b2)
         before = self.month_file().read_bytes()
-        with self.assertRaisesRegex(fc.RegistryError, "不晚於"):
-            fc.append_batch(self.dir, *self.b2)        # 重複
-        with self.assertRaisesRegex(fc.RegistryError, "不晚於"):
+        with self.assertRaises(fc.AlreadyIssued):
+            fc.append_batch(self.dir, *self.b2)        # 同一天重跑：不是錯誤，但也不會寫第二次
+        with self.assertRaisesRegex(fc.RegistryError, "早於"):
             fc.append_batch(self.dir, *self.b1)        # 補發舊的
         self.assertEqual(self.month_file().read_bytes(), before)
         fc.verify_registry(self.dir)

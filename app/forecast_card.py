@@ -81,6 +81,10 @@ class RegistryError(ValueError):
     """登記簿違反規則（重複、時間倒退、雜湊對不上……）。"""
 
 
+class AlreadyIssued(RegistryError):
+    """同一個發布時間已經發布過（例如同一天手動重跑）：不是錯誤，只是不需要再做一次。"""
+
+
 # ---------- 正規化與雜湊 ----------
 
 def sig(x, digits=6):
@@ -175,9 +179,24 @@ def card_id(issued_at, set_name, region_id, m, T):
     return f"F-{pd.Timestamp(issued_at):%Y%m%dT%H%M}-{set_name}-{region_id}-M{m:g}-{T:g}d"
 
 
+def check_lag(issued_at, now, max_hours):
+    """快照的發布時間和實際產生時間差太多就拒絕。
+
+    為什麼：預先登記的意思是「發布當下就鎖定」。如果排程延遲了半天才執行，卡片雖然標著當時的發布時間，
+    實際是事後才算的；與其標一個不實的時間，不如這一天不發，讓缺漏留在紀錄裡。
+    """
+    lag = (pd.Timestamp(now) - pd.Timestamp(issued_at)) / pd.Timedelta(hours=1)
+    if lag < 0:
+        raise RegistryError(f"快照發布時間 {iso(issued_at)} 晚於現在 {iso(now)}")
+    if lag > max_hours:
+        raise RegistryError(f"快照發布時間 {iso(issued_at)} 距現在 {lag:.1f} 小時，超過允許的 {max_hours:g} 小時；"
+                            "今天不發標準卡（避免事後才算卻標著當時的時間）")
+    return lag
+
+
 def build_batch(snap, uniform, regions=STANDARD_REGIONS, mags=STANDARD_MAGS, windows=STANDARD_WINDOWS,
-                set_name=SET_STANDARD):
-    """快照 → (標頭, 卡片清單)。標頭還沒有 prev_hash／hash。"""
+                set_name=SET_STANDARD, generated_at=None):
+    """快照 → (標頭, 卡片清單)。標頭還沒有 prev_hash／hash。generated_at：實際產生的時間（UTC），有給才記錄。"""
     issued_at = snap.issue_time
     cards, region_info = [], {}
     on_grid = lambda T: bool(np.isclose(float(T), snap.horizons, rtol=1e-9, atol=0).any())  # noqa: E731
@@ -204,10 +223,13 @@ def build_batch(snap, uniform, regions=STANDARD_REGIONS, mags=STANDARD_MAGS, win
               "issued_at": iso(issued_at), "model": model_info(snap),
               "data_status": {"catalog_end": status.get("catalog_end") or snap.params.get("catalog_end"),
                               "gap_days": status.get("gap_days"), "n_provisional": status.get("n_provisional"),
-                              "n_provisional_by_source": status.get("n_provisional_by_source")},
+                              "n_provisional_by_source": status.get("n_provisional_by_source"),
+                              "errors": status.get("errors") or []},
               "resolution": RESOLUTION, "notes": NOTES, "regions": region_info, "mags": list(mags), "windows": list(windows),
               "uniform_rate_per_cell_day": sig(snap.params["fit_info"]["uniform_rate_per_cell_day"]),
               "n_cards": len(cards)}
+    if generated_at is not None:
+        header["generated_at"] = iso(generated_at)
     return header, cards
 
 
@@ -290,8 +312,10 @@ def append_batch(registry_dir, header, cards):
     existing = _all_batches(registry_dir)
     if existing:
         last_hdr = existing[-1][0]
-        if header["issued_at"] <= last_hdr["issued_at"]:
-            raise RegistryError(f"發布時間 {header['issued_at']} 不晚於最後一批 {last_hdr['issued_at']}"
+        if header["issued_at"] == last_hdr["issued_at"]:
+            raise AlreadyIssued(f"發布時間 {header['issued_at']} 已經發布過")
+        if header["issued_at"] < last_hdr["issued_at"]:
+            raise RegistryError(f"發布時間 {header['issued_at']} 早於最後一批 {last_hdr['issued_at']}"
                                 "（已發布過，或快照太舊）；不允許補發或改寫")
         prev = last_hdr["hash"]
     else:
@@ -319,8 +343,12 @@ def main():
     ap.add_argument("--base", default=str(APP_DIR / "data"), help="基準快照（取均勻對照用的目錄與參數）")
     ap.add_argument("--verify", action="store_true", help="只驗證雜湊鏈")
     ap.add_argument("--dry-run", action="store_true", help="只算、不寫")
-    ap.add_argument("--any-hour", action="store_true", help="允許非 UTC 00:00 的快照（測試用；標準卡每日只發一次）")
+    ap.add_argument("--any-hour", action="store_true",
+                    help="允許非 UTC 00:00 的快照、並略過延遲檢查（測試用；標準卡每日只發一次）")
+    ap.add_argument("--max-lag-hours", type=float, default=2.0, help="快照發布時間距現在最多幾小時，超過就不發")
+    ap.add_argument("--now", default=None, help="現在的時間（UTC），預設為系統時間；測試用")
     args = ap.parse_args()
+    now = pd.Timestamp.now("UTC").tz_localize(None) if args.now is None else pd.Timestamp(args.now)
 
     if args.verify:
         print(json.dumps(verify_registry(args.registry), ensure_ascii=False))
@@ -330,13 +358,24 @@ def main():
     if snap.issue_time.hour != ISSUE_HOUR_UTC and not args.any_hour:
         sys.exit(f"快照發布時間 {iso(snap.issue_time)} 不是 UTC {ISSUE_HOUR_UTC:02d}:00；"
                  "標準卡每日只在這個整點的快照發布。")
+    if not args.any_hour:
+        try:
+            check_lag(snap.issue_time, now, args.max_lag_hours)
+        except RegistryError as e:
+            sys.exit(str(e))
     uniform, _ = uniform_per_cell(args.base, snap, STANDARD_WINDOWS)
-    header, cards = build_batch(snap, uniform)
+    header, cards = build_batch(snap, uniform, generated_at=now)
     size = sum(len(canonical(c)) + 1 for c in cards) + len(canonical(header)) + 1
     if args.dry_run:
         print(f"試算：{len(cards)} 張卡、約 {size / 1024:.0f} KB（發布時間 {header['issued_at']}），未寫入")
         return
-    h = append_batch(args.registry, header, cards)
+    try:
+        h = append_batch(args.registry, header, cards)
+    except AlreadyIssued as e:
+        print(f"{e}，略過（不重複發布、不改寫）。")
+        return
+    except RegistryError as e:
+        sys.exit(str(e))
     stats = verify_registry(args.registry)
     print(f"已發布 {len(cards)} 張卡（約 {size / 1024:.0f} KB），hash {h[:12]}…；登記簿共 {stats['batches']} 批、{stats['cards']} 張")
 

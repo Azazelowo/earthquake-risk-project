@@ -54,9 +54,11 @@ jobs:
         run: |
           mkdir -p work out
           if [ -f feed-branch/provisional_events.csv ]; then cp feed-branch/provisional_events.csv work/; fi
+          if [ -f feed-branch/fetch_log.csv ]; then cp feed-branch/fetch_log.csv work/; fi
           python app/live_update.py --live work
           python app/export_feed.py --data work --out out/feed.json
           cp work/provisional_events.csv out/ 2>/dev/null || true
+          cp work/fetch_log.csv out/ 2>/dev/null || true   # 預報卡的速判靠它判斷視窗內有沒有連續抓取
           cp work/params.json out/status.json
           echo "## feed.json" >> "$GITHUB_STEP_SUMMARY"
           python -c "import json;f=json.load(open('out/feed.json',encoding='utf-8'));d=f['data_status'];print(f\"- 發布 {f['issued_at']}；暫時資料 {d['n_provisional']} 筆；來源：{'、'.join(d['sources'])}\")" >> "$GITHUB_STEP_SUMMARY"

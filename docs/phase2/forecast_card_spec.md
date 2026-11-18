@@ -319,5 +319,44 @@ repo 擁有者**技術上仍可重寫分支歷史**。能做的緩解：
 - [ ] `forecasts` 分支建立，並已設定禁止強制推送
 - [x] 登記簿實際體積已實測：一批約 62 KB、一年約 23 MB 未壓縮（§5 第 4 點）
 - [x] 測試通過：卡片欄位與雜湊鏈（`test_forecast_card.py`，18 個）、裁決邊界與計分（`test_forecast_resolve.py`，21 個）
-- [ ] `forecast-daily.yml` 排程與 `forecasts` 分支的推送流程
+- [x] `forecast-daily.yml` 已寫（§14）；**要你手動做的上線步驟**（建分支、設保護、打開總開關）見 §14
 - [x] 「倍數」處理完畢（§12.3）：M5 已修，倍數的語意與歷史分布寫入批次標頭 `notes`
+
+## 14. 每日排程與上線步驟
+
+**檔案**：[`.github/workflows/forecast-daily.yml`](../../.github/workflows/forecast-daily.yml)
+
+### 14.1 每日做什麼（UTC 00:20，台北 08:20）
+
+| 步驟 | 內容 | 失敗時 |
+|---|---|---|
+| 1 | 讀 `feed` 分支累積的暫時事件與抓取紀錄，用 `live_update` 重算到 UTC 00:00 的快照 | 整個工作失敗 |
+| 2 | 發布標準卡（`forecast_card.py`） | 快照發布時間距現在超過 2 小時就**不發**，缺漏留在紀錄裡，不事後補算；同一天重跑只印「已發布過」並正常結束 |
+| 3 | 速判（`forecast_resolve.py resolve --stage speed`） | 沒有成功的抓取紀錄就明確失敗 |
+| 4 | 計分與模型狀態，寫成 `scores/speed.json`（標「暫時」） | — |
+| 5 | 驗證登記簿與裁決紀錄的雜湊鏈，再**一般推送**到 `forecasts` 分支（絕不強制推送） | 驗證不過就不推送 |
+| 6 | 最後一步：發布、速判、計分任何一項失敗，整個工作標為失敗（但前面的步驟不會被擋住） | — |
+
+定判**不在排程裡**：GDMS 正式目錄要手動下載，匯入後手動執行 `forecast_resolve.py resolve --stage final --formal <events.parquet>`。
+
+### 14.2 這次為了排程補的三個東西
+
+1. **抓取紀錄 `fetch_log.csv`**：`live_update` 每次抓取寫一列（時間、USGS 與 CWA 各自成不成功、CWA 單一資料集回了幾筆）。原本速判是用暫時事件裡的 `fetched_at` 判斷有沒有連續抓取，但那只是「該事件最後一次被看到的時間」（同一事件重抓會被覆蓋），不是抓取紀錄，實際運作會誤判。`hourly-feed.yml` 現在也會把它存到 `feed` 分支。
+2. **`generated_at`**：每批標頭記錄實際產生時間，和 `issued_at`（快照時間）並列，之後可以檢查「發布當下」是否名副其實。
+3. **`--max-lag-hours`**（預設 2）：見上表步驟 2。
+
+### 14.3 上線步驟（**要你手動做**，順序不能換）
+
+1. 合併這個分支到 `main`（排程只會在預設分支上跑）。
+2. GitHub → Actions → **Forecast daily** → Run workflow，勾選 `init_branch`，建立空的 `forecasts` 分支。
+3. GitHub → Settings → Branches → 為 `forecasts` 新增保護規則：**禁止強制推送、禁止刪除**。（這是「預先登記」可信度的前提，見 §7.3。）
+4. 確認 §13 的發布前檢查清單**全部**通過。
+5. Settings → Secrets and variables → Actions → **Variables** → 新增 `FORECAST_ISSUE_ENABLED` = `true`。**這一步之後，下一次排程就會發出第一批標準卡，無法收回。**
+
+在第 5 步之前，排程每天都會被略過（`daily` 工作的條件是這個變數為 `true`），不會寫入任何東西。
+
+### 14.4 尚未驗證的部分
+
+- 這個工作流程**還沒有在 GitHub 上實際跑過**。我在本機照順序跑過每個指令（含延遲拒絕、重複發布、驗證），並檢查了 YAML 語法，但 Actions 環境（權限、`checkout` 其他分支、`vars` 條件、排程的實際延遲）要第一次跑才知道。建議先手動跑 `init_branch`，再在打開總開關前手動觸發一次（會因為總開關關閉而略過，確認不出錯）。
+- 排程延遲超過 2 小時的頻率不知道；若常發生，要調整 cron 時間或延遲上限（調整延遲上限會改變「預先登記」的嚴格度，要升級規格版本）。
+

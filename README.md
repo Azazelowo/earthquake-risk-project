@@ -22,7 +22,7 @@ flowchart LR
     C --> D[app/live_update.py<br/>每小時更新到現在]
     D --> E[app/export_feed.py<br/>feed.json]
     E --> F[手機 APP]
-    E --> G[預報卡<br/>規格已確認，尚未實作]
+    E --> G[預報卡<br/>產生器與登記簿已寫，尚未發布]
     P[地磁 / GNSS / TEC<br/>10 11 12 13] -.只展示，未計入機率.-> C
 ```
 

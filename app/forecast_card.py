@@ -42,7 +42,8 @@ from eqforecast import hazard as hz  # noqa: E402
 
 SPEC_VERSION = "1"
 SET_STANDARD = "standard"
-ISSUE_HOUR_UTC = 0                 # 標準卡每日一次：UTC 00:00（台北 08:00）的快照
+ISSUE_HOUR_UTC = 0                 # 標準卡每日一批：UTC 00 時（台北 08 時）內的快照。feed 每 15 分鐘一個快照，
+                                   # 所以可能是 00:00、00:15、00:30 或 00:45；每個 UTC 日期最多一批（見 append_batch）
 EXTRAPOLATED_MAG = 6.5             # 與 hazard_core.reliability 相同：M6.5 以上回測樣本極少
 RECENT_DAYS = 30
 RECENT_TOP = 3
@@ -312,6 +313,13 @@ def append_batch(registry_dir, header, cards):
     existing = _all_batches(registry_dir)
     if existing:
         last_hdr = existing[-1][0]
+        if header.get("set") == SET_STANDARD:
+            # 每個 UTC 日期最多一批標準卡。feed 每 15 分鐘一個快照，只比對「發布時間完全相同」擋不住
+            # 同一天先後用 00:15 與 00:45 兩個快照各發一批；那會讓同一天的卡重複、計分被灌水。
+            day = header["issued_at"][:10]
+            for h, _ in existing:
+                if h.get("set") == SET_STANDARD and h["issued_at"][:10] == day:
+                    raise AlreadyIssued(f"{day}（UTC）已經發布過標準卡（{h['issued_at']}）")
         if header["issued_at"] == last_hdr["issued_at"]:
             raise AlreadyIssued(f"發布時間 {header['issued_at']} 已經發布過")
         if header["issued_at"] < last_hdr["issued_at"]:
@@ -356,8 +364,8 @@ def main():
     data_dir = Path(args.data) if args.data else hc.pick_data_dir(APP_DIR / "data", APP_DIR / "live")
     snap = hc.load_snapshot(data_dir)
     if snap.issue_time.hour != ISSUE_HOUR_UTC and not args.any_hour:
-        sys.exit(f"快照發布時間 {iso(snap.issue_time)} 不是 UTC {ISSUE_HOUR_UTC:02d}:00；"
-                 "標準卡每日只在這個整點的快照發布。")
+        sys.exit(f"快照發布時間 {iso(snap.issue_time)} 不在 UTC {ISSUE_HOUR_UTC:02d} 時；"
+                 "標準卡每日只在這個時段的快照發布。")
     if not args.any_hour:
         try:
             check_lag(snap.issue_time, now, args.max_lag_hours)

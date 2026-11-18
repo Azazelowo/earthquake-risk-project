@@ -200,10 +200,38 @@ class RegistryTest(unittest.TestCase):
         before = self.month_file().read_bytes()
         with self.assertRaises(fc.AlreadyIssued):
             fc.append_batch(self.dir, *self.b2)        # 同一天重跑：不是錯誤，但也不會寫第二次
+        with self.assertRaises(fc.AlreadyIssued):
+            fc.append_batch(self.dir, *self.b1)        # 補發已經有的那一天
+        older = fc.build_batch(later(self.snap, -12), self.uniform, regions=fc.STANDARD_REGIONS[:1], mags=(4.0,),
+                               windows=(7,))
         with self.assertRaisesRegex(fc.RegistryError, "早於"):
-            fc.append_batch(self.dir, *self.b1)        # 補發舊的
+            fc.append_batch(self.dir, *older)          # 補發更早、沒發過的一天：時間倒退
         self.assertEqual(self.month_file().read_bytes(), before)
         fc.verify_registry(self.dir)
+
+    def test_only_one_standard_batch_per_utc_day_even_with_a_15_minute_snapshot_step(self):
+        """feed 每 15 分鐘一個快照：同一個 UTC 日期用 00:15 和 00:45 兩個快照，不能各發一批。"""
+        def at(minutes):
+            t = (self.snap.issue_time + np.timedelta64(-10, "D") + np.timedelta64(minutes, "m")).strftime("%Y-%m-%d %H:%M:%S")
+            return dataclasses.replace(self.snap, params={**self.snap.params, "issue_time": t})
+        small = dict(regions=fc.STANDARD_REGIONS[:1], mags=(4.0,), windows=(7,))
+        first = fc.build_batch(at(15), self.uniform, **small)
+        second = fc.build_batch(at(45), self.uniform, **small)
+        fc.append_batch(self.dir, *first)
+        before = self.month_file().read_bytes()
+        with self.assertRaisesRegex(fc.AlreadyIssued, "已經發布過標準卡"):
+            fc.append_batch(self.dir, *second)
+        self.assertEqual(self.month_file().read_bytes(), before)                  # 沒有寫入任何東西
+        fc.append_batch(self.dir, *fc.build_batch(later(self.snap, -9), self.uniform, **small))   # 隔天可以
+        self.assertEqual(fc.verify_registry(self.dir)["batches"], 2)
+
+    def test_custom_cards_are_not_limited_by_the_daily_rule(self):
+        small = dict(regions=fc.STANDARD_REGIONS[:1], mags=(4.0,), windows=(7,))
+        std = fc.build_batch(later(self.snap, -10), self.uniform, **small)
+        fc.append_batch(self.dir, *std)
+        h, c = fc.build_batch(later(self.snap, -9), self.uniform, set_name="custom", **small)
+        fc.append_batch(self.dir, h, c)                                           # 不同日、custom：照常
+        self.assertEqual(fc.verify_registry(self.dir)["batches"], 2)
 
     def test_stale_head_is_detected(self):
         self.fill(self.b1, self.b2)

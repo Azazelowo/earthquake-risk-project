@@ -72,12 +72,18 @@ class Snapshot:
 
 
 def background_rescale(params):
-    """把匯出的 n_bg 換成「只有背景」模型自己的水準。
+    """（只針對舊版快照）把匯出的 n_bg 換成「只有背景」模型自己的水準。
+
+    新版快照（params 有 calibration_factors_bg）的 n_bg 已經是只有背景模型自己的數字，回傳 1。
+    舊算法還是有偏差（用了完整模型的校準倍率，審查 M5），所以請用 scripts/refresh_bg_calibration.py 更新快照。
+
 
     匯出的 n_bg 是完整模型裡的背景項，倍率 mu 是和近期加成一起擬合的；近期加成分走了一部分
     地震，所以 mu 偏小（約 0.54），直接拿來當「平常」會讓每個地方看起來都比平常高約 2 倍。
     只有背景時單獨擬合的倍率是 fit_info.mu_bg_only（約 1.21），用它的比例換算回來。
     """
+    if "calibration_factors_bg" in params:
+        return 1.0      # 新版快照：n_bg 已經是「只有背景」模型自己的數字（審查 M5），不用再換算
     mu = params.get("params", {}).get("mu")
     mu_bg = params.get("fit_info", {}).get("mu_bg_only")
     if mu and mu_bg:

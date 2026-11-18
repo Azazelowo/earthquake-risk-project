@@ -105,6 +105,16 @@ class TestHazardCore(unittest.TestCase):
         s2 = hc.load_snapshot(d)
         np.testing.assert_allclose(s2.n_bg, self.snap.n_bg * 2.5)
 
+    def test_own_calibrated_background_is_not_rescaled(self):
+        """新版快照（有 calibration_factors_bg）的 n_bg 已經是「只有背景」自己的數字，載入時不能再換算（M5）。"""
+        prm = {"params": {"mu": 0.5}, "fit_info": {"mu_bg_only": 1.25}, "calibration_factors_bg": {"7.00000": 1.5}}
+        self.assertEqual(hc.background_rescale(prm), 1.0)
+        d = Path(self._tmp.name)
+        p = json.loads((d / "params.json").read_text(encoding="utf-8"))
+        p.update(prm | {"params": {"m_ref": 3.5, "b": 1.0, "mu": 0.5}})
+        (d / "params.json").write_text(json.dumps(p), encoding="utf-8")
+        np.testing.assert_allclose(hc.load_snapshot(d).n_bg, self.snap.n_bg)
+
     def test_magnitude_at_probability_inverts(self):
         s, w = self.snap, hc.all_weights(self.snap)
         m = hc.magnitude_at_probability(s, w, 30, 0.1)

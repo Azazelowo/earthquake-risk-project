@@ -141,6 +141,43 @@ class RecalibrationTest(unittest.TestCase):
                                1.0, delta=0.15)                                 # 發生率穩定時接近 1
 
 
+class BackgroundOnlyExportTest(unittest.TestCase):
+    """「平常值」要用只有背景模型自己的校準倍率（審查 M5）。"""
+
+    def setUp(self):
+        quiet = synthetic(n=3000, seed=30, start="1995-01-01", end="2010-01-01")
+        busy = synthetic(n=3000, seed=31, start="2010-01-01", end="2013-01-01")   # 近年發生率約 5 倍
+        self.ev = pd.concat([quiet, busy]).sort_values("time").reset_index(drop=True)
+        self.t0 = pd.Timestamp("2012-06-01")
+        self.cat = hz.Catalog(self.ev, GRID, 3.5)
+        self.prm = hz.HazardParams(mu=0.5, K=0.05, alpha=0.0, p=0.9, sigma_bg=0.5, sigma_st=0.5)
+        self.mu_bg = 1.1
+
+    def test_bg_only_params_drop_short_term_and_use_own_mu(self):
+        b = hz.bg_only_params(self.prm, self.mu_bg)
+        self.assertEqual((b.mu, b.K), (1.1, 0.0))
+        self.assertEqual((b.p, b.sigma_bg, b.b), (self.prm.p, self.prm.sigma_bg, self.prm.b))
+
+    def test_uses_own_factor_not_the_full_models(self):
+        n, f_bg = hz.background_only_export(self.cat, self.t0, 7.0, self.prm, self.mu_bg)
+        bgp = hz.bg_only_params(self.prm, self.mu_bg)
+        self.assertAlmostEqual(f_bg, hz.trailing_factor(self.cat, self.t0, 7.0, bgp), places=12)
+        a, _ = hz.expected_ref(self.cat, self.t0, 7.0, bgp)
+        np.testing.assert_allclose(n, a * f_bg, rtol=1e-12)
+        f_full = hz.trailing_factor(self.cat, self.t0, 7.0, self.prm)
+        self.assertNotAlmostEqual(f_bg, f_full, places=3)                      # 兩個模型的倍率本來就不同
+
+    def test_total_matches_recent_observed_rate(self):
+        """校準的意義：「平常」的全區總量要接近近兩年同長度窗的實際平均。"""
+        n, _ = hz.background_only_export(self.cat, self.t0, 7.0, self.prm, self.mu_bg)
+        h = np.timedelta64(7, "D")
+        t0 = np.datetime64(self.t0, "us")
+        obs = [float(self.cat.counts(t, t + h).sum()) for t in (t0 - h - np.timedelta64(7 * k, "D") for k in range(104))]
+        self.assertAlmostEqual(float(n.sum()) / np.mean(obs), 1.0, delta=0.25)
+        self.assertGreater(float(n.sum()), 2.0 * hz.expected_ref(self.cat, self.t0, 7.0,
+                                                                  hz.bg_only_params(self.prm, self.mu_bg))[0].sum() * 0.5)
+
+
 class UniformReferenceTest(unittest.TestCase):
     """預報卡的「均勻值」：每格相同，總量用過去資料滾動校準，和回測的均勻對照同一個定義。"""
 

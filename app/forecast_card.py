@@ -68,6 +68,15 @@ RESOLUTION = {
 }
 
 
+NOTES = {
+    "pb": "平常值＝只有背景的模型（長期空間分布），總量用它自己的滾動校準，約等於近 730 天同長度窗的平均水準。",
+    "pu": "均勻值＝每格相同，總量用同一套滾動校準；是最低標準的對照，不是預報。",
+    "ratio": "倍數 n÷nb＝模型相對『平常』。小於 1 代表現在比近兩年平均安靜，不是『比較安全』。"
+             "歷史分布（全區、M≥3.5、7 天，2016–2026，每 4 週取樣、n=140）：中位數 1.04、P10–P90 為 0.69–1.46、"
+             "44% 的時間小於 1、最大 3.8（2024 年花蓮地震後）。",
+}
+
+
 class RegistryError(ValueError):
     """登記簿違反規則（重複、時間倒退、雜湊對不上……）。"""
 
@@ -196,7 +205,7 @@ def build_batch(snap, uniform, regions=STANDARD_REGIONS, mags=STANDARD_MAGS, win
               "data_status": {"catalog_end": status.get("catalog_end") or snap.params.get("catalog_end"),
                               "gap_days": status.get("gap_days"), "n_provisional": status.get("n_provisional"),
                               "n_provisional_by_source": status.get("n_provisional_by_source")},
-              "resolution": RESOLUTION, "regions": region_info, "mags": list(mags), "windows": list(windows),
+              "resolution": RESOLUTION, "notes": NOTES, "regions": region_info, "mags": list(mags), "windows": list(windows),
               "uniform_rate_per_cell_day": sig(snap.params["fit_info"]["uniform_rate_per_cell_day"]),
               "n_cards": len(cards)}
     return header, cards

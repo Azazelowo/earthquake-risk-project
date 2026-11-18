@@ -218,6 +218,25 @@ def trailing_factor(cat, t0, horizon_days, prm, trailing_days=730.0, step_days=7
     return recalibration_factor(pred, obs)
 
 
+def bg_only_params(prm, mu_bg_only):
+    """「只有背景」模型的參數：沿用形狀參數，K＝0，背景倍率換成單獨擬合的 mu_bg_only。"""
+    return HazardParams(**{**prm.to_dict(), "mu": float(mu_bg_only), "K": 0.0})
+
+
+def background_only_export(cat, t0, horizon_days, prm, mu_bg_only, trailing_days=730.0):
+    """匯出給 APP 的「平常值」：只有背景的模型，**用它自己的**滾動校準倍率。回傳 (每格期望數, 倍率)。
+
+    為什麼（審查 M5）：舊版把「平常」寫成完整模型背景項 × 完整模型的校準倍率，再用 mu 的比例換算。
+    但完整模型與「只有背景」的模型對同一段過去的預測總量不同，各自需要的校準倍率也不同；
+    2026-09-30 的實測是「只有背景」的倍率比完整模型大 1.4–1.8 倍。用錯倍率，「平常」就被低估，
+    「倍數」（模型 ÷ 平常）跟著被高估。回測裡兩個模型本來就是各自校準的，這裡讓匯出與回測是同一把尺。
+    """
+    bgp = bg_only_params(prm, mu_bg_only)
+    a, _ = expected_ref(cat, t0, horizon_days, bgp)
+    f = trailing_factor(cat, t0, horizon_days, bgp, trailing_days=trailing_days)
+    return a * f, f
+
+
 def uniform_expected_ref(cat, t0, horizon_days, rate_per_cell_day, trailing_days=730.0, step_days=7.0):
     """均勻對照：每格相同的 N(T, ≥m_ref)，總量用和 `trailing_factor` 相同的滾動校準。
 

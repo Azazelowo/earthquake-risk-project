@@ -65,6 +65,33 @@ class TestRecompute(unittest.TestCase):
         cols = [c for c in ref.columns if c.startswith("n_")]
         np.testing.assert_allclose(out[cols].to_numpy(), ref[cols].to_numpy(), rtol=1e-4)
 
+    def test_normal_is_background_only_with_its_own_factor(self):
+        p = lu.load_params(BASE)
+        self.assertIn("calibration_factors_bg", p, "app/data 要是新版快照（scripts/refresh_bg_calibration.py）")
+        t0 = pd.Timestamp(p["issue_time"])
+        out = lu.compute_hazard(lu.read_base_catalog(BASE), p, t0)
+        prm, grid = lu.hazard_params(p), lu.grid_of(p)
+        cat = lu.hz.Catalog(lu.read_base_catalog(BASE), grid, prm.m_ref)
+        bgp = lu.hz.bg_only_params(prm, p["fit_info"]["mu_bg_only"])
+        a_bg, _ = lu.hz.expected_ref(cat, t0, 7.0, bgp)
+        want = a_bg.ravel() * p["calibration_factors_bg"]["7.00000"]
+        np.testing.assert_allclose(out["n_bg_7.00000d"].to_numpy(), want, rtol=1e-12)
+
+    def test_normal_total_is_close_to_recent_average_rate(self):
+        """「平常」的意思是近兩年同長度窗的平均水準。舊算法（用完整模型的倍率）會系統性低估約 1.5–1.8 倍。"""
+        p = lu.load_params(BASE)
+        t0 = pd.Timestamp(p["issue_time"])
+        prm, grid = lu.hazard_params(p), lu.grid_of(p)
+        cat = lu.hz.Catalog(lu.read_base_catalog(BASE), grid, prm.m_ref)
+        h = np.timedelta64(7, "D")
+        t0n = np.datetime64(t0, "us")
+        obs = np.mean([float(cat.counts(t, t + h).sum())
+                       for t in (t0n - h - np.timedelta64(7 * k, "D") for k in range(104))])
+        ref = pd.read_csv(BASE / "hazard_latest.csv")
+        self.assertAlmostEqual(float(ref["n_bg_7.00000d"].sum()) / obs, 1.0, delta=0.2)
+        legacy = float(ref["n_ref_7.00000d"].sum())          # 完整模型現在（偏安靜）比近兩年平均低，但不該像舊「平常」那樣低到 0.6
+        self.assertGreater(float(ref["n_bg_7.00000d"].sum()), legacy)
+
     def test_update_offline_with_fake_sources(self):
         with tempfile.TemporaryDirectory() as tmp:
             live = Path(tmp) / "live"

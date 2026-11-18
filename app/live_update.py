@@ -169,11 +169,17 @@ def compute_hazard(events, params, t0):
     prm, grid = hazard_params(params), grid_of(params)
     cat = hz.Catalog(events, grid, prm.m_ref)
     out = grid.frame()
+    own_bg = "calibration_factors_bg" in params     # 新版快照：「平常」用自己的校準倍率（審查 M5）
+    bgp = hz.bg_only_params(prm, params["fit_info"]["mu_bg_only"]) if own_bg else None
     for T in params["export_horizons_days"]:
         a, b = hz.expected_ref(cat, t0, T, prm)
         f = float(params["calibration_factors"][f"{T:.5f}"])
         out[f"n_ref_{T:.5f}d"] = (a + b).ravel() * f
-        out[f"n_bg_{T:.5f}d"] = a.ravel() * f
+        if own_bg:
+            a_bg, _ = hz.expected_ref(cat, t0, T, bgp)
+            out[f"n_bg_{T:.5f}d"] = a_bg.ravel() * float(params["calibration_factors_bg"][f"{T:.5f}"])
+        else:                                        # 舊快照：維持舊算法，載入時再用 mu 的比例換算
+            out[f"n_bg_{T:.5f}d"] = a.ravel() * f
     return out
 
 

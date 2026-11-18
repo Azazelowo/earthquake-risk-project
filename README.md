@@ -90,6 +90,7 @@ python -m unittest discover -s pipeline/tests
 | 模型與回測結果 | [`docs/reports/hazard_v1/README.md`](docs/reports/hazard_v1/README.md) |
 | 審查發現與待辦 | [`docs/audit/2026-11-17_全面審查.md`](docs/audit/2026-11-17_全面審查.md) |
 | 預報卡規格（預先登記、計分、失效標準） | [`docs/phase2/forecast_card_spec.md`](docs/phase2/forecast_card_spec.md) |
+| 「如果真的發生會怎樣」歷史類比（實作對應與限制見規格 §8.1） | [`app/what_if.py`](app/what_if.py)、[`docs/phase2/forecast_card_spec.md`](docs/phase2/forecast_card_spec.md) |
 | 系統分析與設計文件 | `docs/sad/`、`docs/uml/` |
 | 協作規則與技能 | [`AGENTS.md`](AGENTS.md)、[`SKILLS.md`](SKILLS.md) |
 

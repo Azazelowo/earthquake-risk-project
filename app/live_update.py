@@ -170,11 +170,17 @@ def compute_hazard(events, params, t0):
     prm, grid = hazard_params(params), grid_of(params)
     cat = hz.Catalog(events, grid, prm.m_ref)
     out = grid.frame()
+    own_bg = "calibration_factors_bg" in params     # 新版快照：「平常」用自己的校準倍率（審查 M5）
+    bgp = hz.bg_only_params(prm, params["fit_info"]["mu_bg_only"]) if own_bg else None
     for T in params["export_horizons_days"]:
         a, b = hz.expected_ref(cat, t0, T, prm)
         f = float(params["calibration_factors"][f"{T:.5f}"])
         out[f"n_ref_{T:.5f}d"] = (a + b).ravel() * f
-        out[f"n_bg_{T:.5f}d"] = a.ravel() * f
+        if own_bg:
+            a_bg, _ = hz.expected_ref(cat, t0, T, bgp)
+            out[f"n_bg_{T:.5f}d"] = a_bg.ravel() * float(params["calibration_factors_bg"][f"{T:.5f}"])
+        else:                                        # 舊快照：維持舊算法，載入時再用 mu 的比例換算
+            out[f"n_bg_{T:.5f}d"] = a.ravel() * f
     return out
 
 
@@ -205,6 +211,34 @@ def read_base_catalog(base_dir=BASE_DIR):
     return pd.read_csv(Path(base_dir) / "catalog_base.csv", parse_dates=["time"])
 
 
+FETCH_LOG_COLS = ["fetched_at", "usgs_ok", "cwa_ok", "cwa_max_n"]
+CWA_CAP = 16        # CWA API 每個資料集只回最新 16 筆
+
+
+def append_fetch_log(path, row):
+    """每次抓取記一行：什麼時候、USGS 與 CWA 各自成不成功、CWA 單一資料集回了幾筆。
+
+    為什麼要另存：暫時事件裡的 fetched_at 只是「這個事件最後一次被看到的時間」（同一事件重抓會被覆蓋），
+    不是抓取紀錄。預報卡的速判要知道「視窗內有沒有連續抓取」，沒有這份紀錄就沒辦法判斷會不會漏事件。
+    """
+    path = Path(path)
+    new = not path.exists()
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        if new:
+            f.write(",".join(FETCH_LOG_COLS) + "\n")
+        f.write(",".join(str(row[c]) for c in FETCH_LOG_COLS) + "\n")
+
+
+def read_fetch_log(path):
+    """讀抓取紀錄；沒有檔案回傳 None。"""
+    if not Path(path).exists():
+        return None
+    d = pd.read_csv(path, parse_dates=["fetched_at"])
+    for c in ("usgs_ok", "cwa_ok"):
+        d[c] = d[c].astype(str).str.lower().eq("true")
+    return d
+
+
 def read_store(path):
     if Path(path).exists():
         return typed(pd.read_csv(path))
@@ -229,9 +263,11 @@ def update(now=None, base_dir=BASE_DIR, live_dir=LIVE_DIR, network=True, cwa_key
 
     if network:
         fetched_at = now.floor("s")
+        fetch_row = {"fetched_at": str(fetched_at), "usgs_ok": False, "cwa_ok": False, "cwa_max_n": 0}
         try:
             u = fetch_usgs_fn(catalog_end, now, grid)
             store = accumulate(store, u.assign(fetched_at=fetched_at))
+            fetch_row["usgs_ok"] = True
             log(f"USGS：{len(u)} 筆")
         except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
             status["errors"].append(f"USGS 取得失敗：{e}")
@@ -240,12 +276,17 @@ def update(now=None, base_dir=BASE_DIR, live_dir=LIVE_DIR, network=True, cwa_key
             try:
                 c = fetch_cwa_fn(key)
                 store = accumulate(store, c.assign(fetched_at=fetched_at))
+                fetch_row["cwa_ok"] = True
+                # 每個資料集各回傳多少筆：達到上限（16）就可能有更早的報告被擠掉，裁決時要標出來
+                fetch_row["cwa_max_n"] = (int(c["source_id"].astype(str).str.split(":").str[0].value_counts().max())
+                                          if len(c) else 0)
                 log(f"CWA 有感報告：{len(c)} 筆")
             except (urllib.error.URLError, OSError, ValueError, KeyError) as e:
                 status["errors"].append(f"CWA 取得失敗：{e}")
         else:
             status["errors"].append("沒有 CWA_API_KEY，只用 USGS（M4 以上）")
         store.to_csv(store_path, index=False, date_format="%Y-%m-%d %H:%M:%S")
+        append_fetch_log(live_dir / "fetch_log.csv", fetch_row)
 
     prov = store[(store["time"] > catalog_end) & (store["time"] < t0)
                  & store["lat"].between(grid["lat_min"], grid["lat_max"])

@@ -100,3 +100,9 @@ earthquake_data/
 # APP 即時更新與 feed 的本機輸出（GitHub Actions 會把正式版推到 feed 分支）
 app/live/
 app/feed/
+
+# 地電資料下載排程的工作資料夾（Windows 排程每小時寫入，不能搬或改名）
+移轉/
+
+# Claude Code local worktrees / session data
+.claude/

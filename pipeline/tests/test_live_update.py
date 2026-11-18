@@ -65,6 +65,33 @@ class TestRecompute(unittest.TestCase):
         cols = [c for c in ref.columns if c.startswith("n_")]
         np.testing.assert_allclose(out[cols].to_numpy(), ref[cols].to_numpy(), rtol=1e-4)
 
+    def test_normal_is_background_only_with_its_own_factor(self):
+        p = lu.load_params(BASE)
+        self.assertIn("calibration_factors_bg", p, "app/data 要是新版快照（scripts/refresh_bg_calibration.py）")
+        t0 = pd.Timestamp(p["issue_time"])
+        out = lu.compute_hazard(lu.read_base_catalog(BASE), p, t0)
+        prm, grid = lu.hazard_params(p), lu.grid_of(p)
+        cat = lu.hz.Catalog(lu.read_base_catalog(BASE), grid, prm.m_ref)
+        bgp = lu.hz.bg_only_params(prm, p["fit_info"]["mu_bg_only"])
+        a_bg, _ = lu.hz.expected_ref(cat, t0, 7.0, bgp)
+        want = a_bg.ravel() * p["calibration_factors_bg"]["7.00000"]
+        np.testing.assert_allclose(out["n_bg_7.00000d"].to_numpy(), want, rtol=1e-12)
+
+    def test_normal_total_is_close_to_recent_average_rate(self):
+        """「平常」的意思是近兩年同長度窗的平均水準。舊算法（用完整模型的倍率）會系統性低估約 1.5–1.8 倍。"""
+        p = lu.load_params(BASE)
+        t0 = pd.Timestamp(p["issue_time"])
+        prm, grid = lu.hazard_params(p), lu.grid_of(p)
+        cat = lu.hz.Catalog(lu.read_base_catalog(BASE), grid, prm.m_ref)
+        h = np.timedelta64(7, "D")
+        t0n = np.datetime64(t0, "us")
+        obs = np.mean([float(cat.counts(t, t + h).sum())
+                       for t in (t0n - h - np.timedelta64(7 * k, "D") for k in range(104))])
+        ref = pd.read_csv(BASE / "hazard_latest.csv")
+        self.assertAlmostEqual(float(ref["n_bg_7.00000d"].sum()) / obs, 1.0, delta=0.2)
+        legacy = float(ref["n_ref_7.00000d"].sum())          # 完整模型現在（偏安靜）比近兩年平均低，但不該像舊「平常」那樣低到 0.6
+        self.assertGreater(float(ref["n_bg_7.00000d"].sum()), legacy)
+
     def test_update_offline_with_fake_sources(self):
         with tempfile.TemporaryDirectory() as tmp:
             live = Path(tmp) / "live"
@@ -92,9 +119,16 @@ class TestRecompute(unittest.TestCase):
             self.assertEqual(snap.issue_time, pd.Timestamp("2026-11-15 04:15"))
             self.assertTrue((snap.events["source"] == "USGS（暫時）").any())
             self.assertIsNotNone(hc.gap_ratio_at(snap.params, 7))
-            # 再跑一次（離線）不會重複累積
+            # 抓取紀錄：一次成功的抓取一列，CWA 單一資料集回了 1 筆
+            log = lu.read_fetch_log(live / "fetch_log.csv")
+            self.assertEqual(len(log), 1)
+            self.assertTrue(bool(log["usgs_ok"].iloc[0]) and bool(log["cwa_ok"].iloc[0]))
+            self.assertEqual(int(log["cwa_max_n"].iloc[0]), 1)
+            self.assertEqual(log["fetched_at"].iloc[0], pd.Timestamp("2026-11-15 04:20:00"))
+            # 再跑一次（離線）不會重複累積，也不會多記一次抓取
             lu.update(now="2026-11-15 04:20", base_dir=BASE, live_dir=live, network=False, log=lambda *_: None)
             self.assertEqual(len(lu.read_store(live / "provisional_events.csv")), 3)
+            self.assertEqual(len(lu.read_fetch_log(live / "fetch_log.csv")), 1)
 
     def test_network_failure_is_reported_not_raised(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -104,6 +138,10 @@ class TestRecompute(unittest.TestCase):
                                fetch_usgs_fn=boom, fetch_cwa_fn=boom)
             self.assertTrue(any("USGS" in e for e in status["errors"]))
             self.assertTrue(any("CWA_API_KEY" in e for e in status["errors"]))
+            log = lu.read_fetch_log(Path(tmp) / "fetch_log.csv")                 # 失敗的抓取也要記，才看得出缺口
+            self.assertEqual(len(log), 1)
+            self.assertFalse(bool(log["usgs_ok"].iloc[0]) or bool(log["cwa_ok"].iloc[0]))
+            self.assertIsNone(lu.read_fetch_log(Path(tmp) / "nope.csv"))
 
     def test_base_is_used_when_no_live(self):
         with tempfile.TemporaryDirectory() as tmp:

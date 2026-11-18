@@ -111,17 +111,23 @@ def backtest(events, grid, prm, info, test_start, test_end, mags=MAGS, horizons=
     return pd.DataFrame(rows)
 
 
-def export_latest(events, grid, prm, t0, horizons=EXPORT_HORIZONS):
+def export_latest(events, grid, prm, t0, mu_bg_only, horizons=EXPORT_HORIZONS):
+    """每格、每個時間長度的期望數（M≥m_ref）。回傳 (表格, 完整模型的校準倍率, 「平常」的校準倍率)。
+
+    「平常」＝只有背景的模型，用它自己的滾動校準倍率（審查 M5；理由見 hazard.background_only_export）。
+    """
     cat = hz.Catalog(events, grid, prm.m_ref)
     out = grid.frame()
-    factors = {}
+    factors, factors_bg = {}, {}
     for T in horizons:
         a, b = hz.expected_ref(cat, t0, T, prm)
         f = hz.trailing_factor(cat, t0, T, prm, trailing_days=TRAILING_DAYS)
+        n_bg, f_bg = hz.background_only_export(cat, t0, T, prm, mu_bg_only, trailing_days=TRAILING_DAYS)
         factors[f"{T:.5f}"] = f
+        factors_bg[f"{T:.5f}"] = f_bg
         out[f"n_ref_{T:.5f}d"] = (a + b).ravel() * f
-        out[f"n_bg_{T:.5f}d"] = a.ravel() * f
-    return out, factors
+        out[f"n_bg_{T:.5f}d"] = n_bg.ravel()
+    return out, factors, factors_bg
 
 
 def plot_map(latest, grid, prm, m, T, t0, path):
@@ -246,13 +252,15 @@ def main():
     print(bt[["m", "horizon_days", "n_events", "base_rate", "gain_vs_uniform", "gain_vs_bg", "auc_full", "auc_bg",
               "n_ratio_full"]].round(4).to_string(index=False))
 
-    latest, latest_factors = export_latest(events, grid, prm, last)
+    latest, latest_factors, latest_factors_bg = export_latest(events, grid, prm, last, info["mu_bg_only"])
     latest.to_parquet(out / "hazard_latest.parquet", index=False)
     print("最新一期的校準倍率：" + "、".join(f"{horizon_label(float(k))} ×{v:.2f}" for k, v in latest_factors.items()))
+    print("「平常」自己的校準倍率：" + "、".join(f"{horizon_label(float(k))} ×{v:.2f}" for k, v in latest_factors_bg.items()))
     (out / "params.json").write_text(json.dumps(
         {"model_version": MODEL_VERSION, "event_quality": ev_info,
          "params": prm.to_dict(), "fit_info": info, "issue_time": str(last), "export_horizons_days": EXPORT_HORIZONS,
-         "calibration_factors": latest_factors, "calibration_trailing_days": TRAILING_DAYS,
+         "calibration_factors": latest_factors, "calibration_factors_bg": latest_factors_bg,
+         "calibration_trailing_days": TRAILING_DAYS,
          "train": [args.train_start, args.train_end], "test": [args.test_start, args.test_end],
          "grid": {"lat_min": grid.lat_min, "lat_max": grid.lat_max, "lon_min": grid.lon_min, "lon_max": grid.lon_max,
                   "deg": grid.deg}}, ensure_ascii=False, indent=1), encoding="utf-8")

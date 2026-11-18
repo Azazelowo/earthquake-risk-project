@@ -1,0 +1,167 @@
+# 每日發布標準預報卡、裁決到期的卡（速判）、重算計分，寫進 forecasts 分支。規格：docs/phase2/forecast_card_spec.md
+#
+# 為什麼分成「總開關」「建立分支」「每日工作」三塊：
+#   - 預報卡的價值在「預先登記」，第一張標準卡一旦發布就不能收回。規格 §13 的發布前檢查清單沒有全部通過之前，
+#     這個工作流程不會發任何東西：每日工作只在倉庫變數 FORECAST_ISSUE_ENABLED 為 true 時才執行，預設沒有這個變數。
+#   - forecasts 分支必須是「只能新增」的：建立後要先到 GitHub 設定分支保護（禁止強制推送、禁止刪除），
+#     再打開總開關。所以建立分支是手動觸發（init_branch），排程不會自己建。
+#   - 和 hourly-feed 不同，這裡**絕對不能強制推送**：feed 分支每小時只留一個提交，forecasts 分支要留下完整歷史。
+#
+# 每日工作做什麼（UTC 00:20，台北 08:20）：
+#   1. 讀 feed 分支累積的暫時事件與抓取紀錄，重算到 UTC 00:00 的快照（live_update）
+#   2. 發布標準卡（forecast_card）。快照發布時間距現在超過 2 小時就不發，缺漏留在紀錄裡，不事後補算
+#   3. 裁決到期的卡：速判（forecast_resolve resolve）。定判要手動匯入 GDMS 正式目錄，不在排程裡
+#   4. 重算計分與模型狀態，寫成 scores/speed.json（速判，標「暫時」）
+#   5. 驗證兩條雜湊鏈，再一般推送到 forecasts 分支
+# 需要的 Secret：CWA_API_KEY（和 hourly-feed 相同；沒設的話速判會全部標「可能漏事件」）。
+name: Forecast daily
+
+on:
+  schedule:
+    - cron: "20 0 * * *"   # GitHub 的排程可能延遲數分鐘到數十分鐘；超過 2 小時就不發當天的卡
+  workflow_dispatch:
+    inputs:
+      init_branch:
+        description: "第一次使用：建立空的 forecasts 分支（已存在就什麼都不做）。建立後先設定分支保護，再把變數 FORECAST_ISSUE_ENABLED 設成 true"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: forecast-daily
+  cancel-in-progress: false
+
+jobs:
+  init:
+    if: github.event_name == 'workflow_dispatch' && inputs.init_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Create the forecasts branch if it does not exist
+        run: |
+          url="https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          if git ls-remote --exit-code --heads "$url" forecasts >/dev/null 2>&1; then
+            echo "forecasts 分支已存在，不做任何事。" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          d="$(mktemp -d)"; cd "$d"
+          git init -q -b forecasts
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          printf '%s\n' "# forecasts" "" "預報卡登記簿（registry/）、裁決紀錄（results/）、計分（scores/）。" \
+            "只能新增，不得強制推送或改寫歷史；規格見 docs/phase2/forecast_card_spec.md。" > README.md
+          git add README.md
+          git commit -q -m "Initialize forecasts branch"
+          git push -q "$url" forecasts:forecasts
+          {
+            echo "## forecasts 分支已建立"
+            echo "下一步（要你手動做）："
+            echo "1. GitHub → Settings → Branches → 新增保護規則，分支名稱 \`forecasts\`：禁止強制推送、禁止刪除"
+            echo "2. 規格 §13 的發布前檢查清單全部通過後，Settings → Secrets and variables → Actions → Variables，新增 \`FORECAST_ISSUE_ENABLED\` = \`true\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  daily:
+    if: vars.FORECAST_ISSUE_ENABLED == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.init_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v5
+
+      - name: Check out the forecasts branch (must already exist; use init_branch once)
+        uses: actions/checkout@v5
+        with:
+          ref: forecasts
+          path: forecasts-branch
+
+      - name: Check out the feed branch (accumulated provisional events and fetch log)
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          ref: feed
+          path: feed-branch
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Update the snapshot to now (issue time = 00:00 UTC)
+        env:
+          CWA_API_KEY: ${{ secrets.CWA_API_KEY }}
+          PYTHONUTF8: "1"
+        run: |
+          mkdir -p work
+          if [ -f feed-branch/provisional_events.csv ]; then cp feed-branch/provisional_events.csv work/; fi
+          if [ -f feed-branch/fetch_log.csv ]; then cp feed-branch/fetch_log.csv work/; fi
+          python app/live_update.py --live work
+
+      - name: Issue today's standard cards
+        id: issue
+        continue-on-error: true      # 失敗（例如排程延遲太久）不能擋住裁決與計分，最後一步會讓整個工作失敗
+        env:
+          PYTHONUTF8: "1"
+        run: python app/forecast_card.py --registry forecasts-branch/registry --data work
+
+      - name: Resolve due cards (speed stage, provisional catalog)
+        id: speed
+        continue-on-error: true
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python app/forecast_resolve.py resolve --stage speed \
+            --registry forecasts-branch/registry --results forecasts-branch/results/speed \
+            --base app/data --provisional work/provisional_events.csv --fetch-log work/fetch_log.csv
+
+      - name: Score and model status (speed stage; provisional, final stage is imported by hand)
+        id: score
+        continue-on-error: true
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python app/forecast_resolve.py score --stage speed \
+            --registry forecasts-branch/registry --results forecasts-branch/results/speed \
+            --out forecasts-branch/scores/speed.json
+
+      - name: Verify the hash chains
+        id: verify
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          if [ -d forecasts-branch/registry ]; then python app/forecast_card.py --registry forecasts-branch/registry --verify; fi
+          if [ -d forecasts-branch/results/speed ]; then python app/forecast_card.py --registry forecasts-branch/results/speed --verify; fi
+
+      - name: Push to the forecasts branch (normal push, never force)
+        run: |
+          cd forecasts-branch
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "沒有新內容" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            git commit -q -m "forecasts $(date -u +%Y-%m-%dT%H:%MZ)"
+            git push origin HEAD:forecasts
+          fi
+          if [ -f registry/head.json ]; then
+            echo "## 登記簿" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"; cat registry/head.json >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Fail the job if issuing, resolving or scoring failed
+        if: always()
+        run: |
+          bad=""
+          [ "${{ steps.issue.outcome }}" = "failure" ] && bad="$bad 發布"
+          [ "${{ steps.speed.outcome }}" = "failure" ] && bad="$bad 速判"
+          [ "${{ steps.score.outcome }}" = "failure" ] && bad="$bad 計分"
+          if [ -n "$bad" ]; then
+            echo "失敗的步驟：$bad（登記簿與裁決紀錄沒有被改壞；缺漏的那天不會補發）" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi

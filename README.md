@@ -1,52 +1,98 @@
-# 震災風險評估專題
+# 地震風險評估專題
 
-## 專題目的
-本專題利用中央氣象署（CWA）地震目錄及多種地球物理前驅資料（GPS 變形、地磁、地下水層、離電層 TEC、氣壓、雨量、潮汐等），建構 Taiwan 地區的地震風險評估模型，並透過自動化工作流程與驗證管道，產出「基於 X、Y、Z 觀測，區域風險上升 N%」的文字摘要與視覺化報告。
+用地震目錄估計「接下來一段時間，某個地方發生某個規模以上地震的機率」，並用歷史資料回測、公開驗證。
+**這是機率預報，不是預警，也不是預言**：機率通常很小，卡片與畫面都會並列「平常值」當對照。
+
+> **舊版 README 已淘汰**：先前描述的 PowerShell 加權總和評分（`scripts/*.ps1`）沒有科學依據，已由下面的連續式風險函數取代。這些腳本還留在 `scripts/`，只是歷史紀錄，**不要用來得出對外結論**（審查報告 Q2、Q3）。
+
+## 目前的系統
+
+| 子系統 | 位置 | 做什麼 |
+|---|---|---|
+| 資料管線（Python） | `pipeline/src/` | 建地震目錄、清理特徵、估完整規模、回測、前兆資料處理 |
+| 連續式風險函數 v1.1 | `pipeline/src/eqforecast/hazard.py`、`pipeline/src/06_hazard_model.py` | 簡化版 ETAS 型模型：長期背景＋近期活動加成，再換算成任意規模與時間長度的機率 |
+| 風險 APP（電腦版） | `app/` | Streamlit 展示、每小時更新、匯出 `feed.json` |
+| 手機 APP（PWA） | 另一個 repo：[earthquake-risk-app](https://github.com/Azazelowo/earthquake-risk-app) | 讀 `feed.json`，在手機上算規模換算與範圍加總 |
+| 自動化 | `.github/workflows/` | 每小時更新 feed、測試、每日報告檢查、碎形日報封存 |
+
+```mermaid
+flowchart LR
+    A[CWA / GDMS / USGS 地震目錄] --> B[01 建目錄<br/>events.parquet]
+    B --> C[06 風險函數<br/>擬合與回測]
+    C --> D[app/live_update.py<br/>每小時更新到現在]
+    D --> E[app/export_feed.py<br/>feed.json]
+    E --> F[手機 APP]
+    E --> G[預報卡<br/>產生器與登記簿已寫，尚未發布]
+    P[地磁 / GNSS / TEC<br/>10 11 12 13] -.只展示，未計入機率.-> C
+```
+
+## 模型回答什麼，以及它的限制
+
+- 回答：「從現在起 T 這麼久之內，這個區域發生規模 m 以上地震的機率」。m 與 T 可任意指定。
+- 回測（2015-01-01 ～ 2026-09-30）：以 7 天、M≥5 為例，AUC 0.936，預測／實際 0.96；資訊增益對均勻 2.31、對「只有背景」0.64。完整表格見 [`docs/reports/hazard_v1/README.md`](docs/reports/hazard_v1/README.md)。
+- 增益大部分來自「大地震後會有餘震」這個已知規律，**不是預測主震**。
+- 只涵蓋定位品質良好的地震（外海 gap 大的地震不在內）；不分震源深度；M6.5 以上樣本極少，是外推。
+- 地磁、GNSS、TEC 等前兆資料目前**只處理與展示，沒有計入機率**；回測證明有增益才會納入。
+- 已知待處理項目與證據，見 [`docs/audit/2026-11-17_全面審查.md`](docs/audit/2026-11-17_全面審查.md)。
 
 ## 資料來源
-- CWA 地震目錄 CSV（含時間、經緯度、ML、深度等欄位）
-- GPS 變形資料（NSRC GNSS/CORS）
-- 地磁觀測（國防部地磁觀測站）
-- 地下水層水位（水資源署）
-- 離電層 TEC（FORMOSAT-5/COSMIC）
-- 氣壓、雨量（中央氣象署）
-- 潮汐、水載荷（海洋研究院）
-- 地殼應變/應力（地震研究所）
 
-## 主要步驟
-1. **資料匯入**：使用 `Import-EarthquakeCatalog.ps1` 讀取與檢查地震目錄。
-2. **基線計算**：`Compute-Baseline.ps1` 計算最近 30 天區域平均作為基線（ML、深度或震頻）。
-3. **前驅整合**：`Ingest-Precursors.ps1` 統一各前驅資料的時間戳與空間格網。
-4. **風險評分**：`Risk-Scoring.ps1` 實作 Weighted Sum 或 Rule‑based 評分，並輸出風險摘要。
-5. **視覺化**：`Visualize-Results.ps1` 呼叫 Python 的 matplotlib/seaborn 產出時間序列圖、熱力圖與地圖標記。
+| 類別 | 來源 | 用途 |
+|---|---|---|
+| 地震目錄 | 中央氣象署（CWA）與 GDMS 正式目錄、CWA 有感報告、USGS | 模型主要輸入；暫時資料補最近的缺口 |
+| 地磁 | GDMS MAGNET（IAGA-2002） | 前兆研究（`10_process_magnet.py`） |
+| GNSS／TEC | GDMS GNSS（RINEX）、CWA 太空天氣 | 前兆研究（`11_process_gnss_tec.py`、`00_download_space_weather.py`） |
 
-## 本地重現方式
-1. 確認已安裝 PowerShell 5.1 以上與 Python 3（含 matplotlib、seaborn、pandas）。
-2. 複製此專案至本地。
-3. 將所需 CSV 資料放入 `earthquake_data` 資料夾（或依實際路徑修改腳本）。
-4. 按順序執行 scripts 資料夾中的腳本：
-   ```powershell
-   .\scripts\Import-EarthquakeCatalog.ps1
-   .\scripts\Compute-Baseline.ps1
-   .\scripts\Ingest-Precursors.ps1
-   .\scripts\Risk-Scoring.ps1
-   .\scripts\Visualize-Results.ps1
-   ```
-5. 風險摘要將印至主控台，圖表將儲存於 `outputs/` 資料夾。
+資料檔不進版控（體積大、來源有各自條款）。目錄欄位與跨來源比對規則見 [`docs/phase2/catalog_event_matching_spec.md`](docs/phase2/catalog_event_matching_spec.md)。
 
-## 自動化工作流程
-- 每次推送至 `main` 或開 PR 時，GitHub Actions (`.github/workflows/risk-assessment.yml`) 會自動執行 `tests` job：安裝 `requirements.txt` 並以合成資料跑 `pipeline/tests` 的單元測試。
-- 上述 PowerShell 腳本需要 `earthquake_data/CWA_catalog.csv` 與 `precursor_data/`，這些資料不進版控，所以平常在本機執行；workflow 的 `risk-assessment` job 只能手動觸發，缺資料時會在第一步明確中止。
+## 管線步驟（`pipeline/src/`）
+
+| 檔案 | 作用 |
+|---|---|
+| `01_build_catalog.py` | 合併 CWA XML 與 GDMS CSV，輸出 `events.parquet`、`event_matches.parquet` |
+| `02_clean_features.py` | B2：把地磁與 TEC 轉成 0.2° 格網、逐日的特徵 |
+| `03_train_backtest.py` | B3：基準模型與回測 |
+| `04_estimate_mc.py` | 估計完整規模 Mc |
+| `05_compare_runs.py` | 比較不同設定的結果 |
+| `06_hazard_model.py` | 連續式風險函數：擬合、回測、輸出最新一期風險 |
+| `07_hazard_precursor.py` | 前兆特徵加入風險函數的對照試驗 |
+| `10`–`13_*.py` | 地磁、GNSS／TEC 處理、品質報告、視覺化 |
+| `fetch_usgs.py` | 抓 USGS 目錄，整理成統一欄位 |
+
+各檔開頭的說明寫了輸入、輸出與為什麼這樣做。
+
+## 本地重現
+
+```bash
+pip install -r requirements.txt
+python -m unittest discover -s pipeline/tests
+```
+
+- 需要 Python 3.13（`requirements.txt` 註明已測試版本，不支援 3.15 alpha）。
+- 在 Windows 中文版終端機（cp950）執行時，輸出的特殊符號不會再讓程式中斷（`pipeline/src/safe_console.py`）。
+- 重跑模型與 APP 的步驟見 [`app/README.md`](app/README.md) 與各步驟檔頭；需要的資料檔不在版控內，缺檔時程式會說明缺什麼。
+
+## 自動化（`.github/workflows/`）
+
+| 檔案 | 作用 |
+|---|---|
+| `hourly-feed.yml` | 每小時更新風險資料並發布 `feed.json` 到 `feed` 分支（需要 Secret `CWA_API_KEY`） |
+| `pipeline-tests.yml` | 推送與 PR 時跑單元測試 |
+| `forecast-daily.yml` | 每日發布預報卡、速判、計分，寫進 `forecasts` 分支；**預設關閉**，要設變數 `FORECAST_ISSUE_ENABLED` 才會發（見規格 §14） |
+| `daily-report-check.yml`、`fractal-archive.yml` | 每日報告缺漏檢查、碎形日報封存 |
+| `risk-assessment.yml` | 舊 PowerShell 流程的 workflow：評估 job 只能手動觸發；裡面的 tests job 仍會在推送時執行（和 `pipeline-tests.yml` 重複，審查 Q5） |
+
+## 文件地圖
+
+| 想知道 | 看哪裡 |
+|---|---|
+| 專案現況與歷史脈絡 | [`docs/PROJECT_OVERVIEW.md`](docs/PROJECT_OVERVIEW.md)、[`docs/專案現況白話報告.md`](docs/專案現況白話報告.md) |
+| 模型與回測結果 | [`docs/reports/hazard_v1/README.md`](docs/reports/hazard_v1/README.md) |
+| 審查發現與待辦 | [`docs/audit/2026-11-17_全面審查.md`](docs/audit/2026-11-17_全面審查.md) |
+| 預報卡規格（預先登記、計分、失效標準） | [`docs/phase2/forecast_card_spec.md`](docs/phase2/forecast_card_spec.md) |
+| 系統分析與設計文件 | `docs/sad/`、`docs/uml/` |
+| 協作規則與技能 | [`AGENTS.md`](AGENTS.md)、[`SKILLS.md`](SKILLS.md) |
 
 ## 版控習慣
-- 完成有意義的腳本或文件後，執行 `git add`, `git commit -m "描述此次變更的目的"`, `git push`。
-- 使用分支嘗試新假設，實驗完畢再合併回 `main`。
 
-## 安全與可靠性
-- 各腳本皆以 `Test-Path` 檢查檔案存在，失敗時會寫入明確錯誤訊息。
-- 網路下載的前驅資料會在腳本內記錄下載 URL、取得時間與版本。
-- 風險分數輸出時會同時列出不確定度說明。
-
---- 
-
-*此 README 為專案主要說明文件，請依實際需求調整內容。*
+完成有意義的變更後提交，訊息寫清楚「為什麼」；用分支嘗試新假設，驗證後再合併。

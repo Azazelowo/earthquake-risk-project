@@ -79,7 +79,7 @@ flowchart LR
 | 路線 | 內容 | 與提案一致嗎 |
 |---|---|---|
 | **A. 提案** | 見第 1 節 | 基準 |
-| **B. PowerShell 版** | [scripts/](../scripts)、[README.md](../README.md)、[SKILLS.md](../SKILLS.md)、[CI](../.github/workflows/risk-assessment.yml)、[docs/uml/](uml)、[docs/analysis/](analysis)、[Chapter01/](../Chapter01) | ❌ 前兆擴大為 7–9 類（加入地下水、氣壓、雨量、潮汐、地殼應變），權重為假設值 |
+| **B. PowerShell 版** | [scripts/](../scripts)、[README.md](../README.md)、[SKILLS.md](../SKILLS.md)、[CI](../.github/workflows/risk-assessment.yml)、[docs/uml/](uml)、[docs/analysis/](analysis)、[Chapter01/](sad/legacy/Chapter01) | ❌ 前兆擴大為 7–9 類（加入地下水、氣壓、雨量、潮汐、地殼應變），權重為假設值 |
 | **C. Python 管線** | [01_build_catalog.py](../pipeline/src/01_build_catalog.py)、[02_clean_features.py](../pipeline/src/02_clean_features.py) | ✅ 參數大致對齊（Gap 門檻除外） |
 
 **核心問題 [事實]**：所有 SA&D 文件都以路線 B 為基礎，實際在推進的是路線 C，所以文件描述的系統和程式碼對不起來。
@@ -123,7 +123,7 @@ flowchart LR
 | [03_train_backtest.py](../pipeline/src/03_train_backtest.py) | ✅ B3 基準模型已完成 | 見第 10 節 |
 | [scripts/*.ps1](../scripts) | ❌ 無法執行 | 見下表 |
 | [risk-assessment.yml](../.github/workflows/risk-assessment.yml) | ✅ 已改寫 | `tests` job 在 push／PR 時以合成資料跑單元測試；PowerShell 流程改為手動觸發，缺資料時明確中止。原版引用不存在的 `powershell/setup-powershell` action，第一步就失敗 [事實] |
-| [notebooks/analysis.ipynb](../notebooks/analysis.ipynb) | 只有樣板 | 依賴不存在的 `outputs/risk_scores.csv` |
+| [notebooks/analysis.ipynb](notebooks/analysis.ipynb) | 只有樣板 | 依賴不存在的 `outputs/risk_scores.csv` |
 
 PowerShell 腳本的具體問題 [事實]：
 
@@ -161,16 +161,16 @@ PowerShell 腳本的具體問題 [事實]：
 
 | 類別 | 內容 | 檔案 |
 |---|---|---|
-| 範圍矛盾 | 需求規格寫「不包含實時地震警報功能」，UI 流程卻有「警報設定 → 通知紀錄」 | [需求規格說明](<../Chapter01/需求規格說明.md>)、[使用者介面流程](<../Chapter08/使用者介面流程.mmd>) |
+| 範圍矛盾 | 需求規格寫「不包含實時地震警報功能」，UI 流程卻有「警報設定 → 通知紀錄」 | [需求規格說明](<sad/legacy/Chapter01/需求規格說明.md>)、[使用者介面流程](<sad/legacy/Chapter08/使用者介面流程.mmd>) |
 | 資料來源 | 寫「國防部地磁觀測站」「FORMOSAT-5/COSMIC TEC」，提案是 GDMS 與 CWA 太空天氣辦公室 | [資料字典](uml/09_data_dictionary.md)、[元件圖](uml/05_component_diagram.mmd) |
-| 機構錯誤 | 「WRA Geomagnetic」：WRA 是水利署，不負責地磁 | [use_case_diagram.mmd](../Chapter01/use_case_diagram.mmd) |
+| 機構錯誤 | 「WRA Geomagnetic」：WRA 是水利署，不負責地磁 | [use_case_diagram.mmd](sad/legacy/Chapter01/use_case_diagram.mmd) |
 | 驗收標準 | 「命中率 > 60%、漏報率 < 30%」沒有依據，提案中也沒有 | [需求規格表](uml/08_requirements_table.md) |
 | 驗證門檻 | 需求寫 M≥5.5，提案聚焦 M6+，甘特圖寫「4 大地震盲測」→ **已決定以 ML≥5.5 為準** | 多處 |
-| 技術選型 | 需求 NF1 指定 PowerShell，甘特圖規劃 Python + LightGBM + Streamlit | [需求規格說明](<../Chapter01/需求規格說明.md>)、`專題進度甘特圖.xlsx` |
-| ✅ Mermaid 語法 | ERD 的 `\|\|\|..\|{` 不合法（已修正）；全部是 1:1 關係（待重新設計） | [實體關係圖](<../Chapter08/實體關係圖.mmd>) |
+| 技術選型 | 需求 NF1 指定 PowerShell，甘特圖規劃 Python + LightGBM + Streamlit | [需求規格說明](<sad/legacy/Chapter01/需求規格說明.md>)、`專題進度甘特圖.xlsx` |
+| ✅ Mermaid 語法 | ERD 的 `\|\|\|..\|{` 不合法（已修正）；全部是 1:1 關係（待重新設計） | [實體關係圖](<sad/legacy/Chapter08/實體關係圖.mmd>) |
 | ✅ Mermaid 語法 | `useCaseDiagram` 不是 Mermaid 支援的圖種（已改用 flowchart） | [chapter6.md](../coursework/chapter6/chapter6.md) |
 | ✅ Mermaid 語法 | 另有 10 張圖因標籤含括號、`note`、`componentDiagram` 等無法解析（已修正，54 張全數通過） | 多處 |
-| ✅ 用字 | 表頭用簡體字（过程编号、输入、输出） | [處理規範表](<../Chapter08/處理規範表.md>) |
+| ✅ 用字 | 表頭用簡體字（过程编号、输入、输出） | [處理規範表](<sad/legacy/Chapter08/處理規範表.md>) |
 | ✅ 錯字 | 前騨（前驅）、特影（特徵）、貨獲（貢獻）、視覚化、触發；需求規格的「geez 震前」 | [狀態機圖](uml/07_state_machine_diagram.mmd) |
 | ✅ 殘留字元 | 35 個檔案開頭殘留 `$`、`$@`，README 結尾殘留 `@` | 多處 |
 | ✅ 年代錯誤 | 圖 3-2 的 OOP 語言順序把 Python 排在 Java 後、Kotlin 排在 Swift 後 | [圖3-2](<../coursework/ch03/圖3-2_物件導向程式發展歷史.mmd>) |

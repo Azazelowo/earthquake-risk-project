@@ -121,7 +121,7 @@ Remove-Item .\temp_plot.py
 
 ## Python (Jupyter Notebook 範例)
 ```python
-# 在 notebooks/ 內的範例 cell
+# 在 docs/notebooks/ 內的範例 cell
 import pandas as pd
 import folium
 from branca.colormap import linear

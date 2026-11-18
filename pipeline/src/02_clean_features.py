@@ -165,7 +165,8 @@ def magnet_segments(g, storms, jump_nt=MAG_JUMP_NT):
     n = len(g)
     if not {"h_mean", "z_mean"} <= set(g.columns):
         return np.zeros(n, int)
-    usable = (g["coverage"].to_numpy(float) >= MIN_MAG_COVERAGE) & ~np.isin(g.index, list(storms))
+    # 用 pandas 的 isin：np.isin(DatetimeIndex, [Timestamp, ...]) 在部分 numpy／pandas 版本會全部比對失敗
+    usable = (g["coverage"].to_numpy(float) >= MIN_MAG_COVERAGE) & ~g.index.isin(pd.DatetimeIndex(list(storms)))
     total = np.zeros(n, int)
     for col in ("h_mean", "z_mean"):
         v = np.where(usable, g[col].to_numpy(float), np.nan)

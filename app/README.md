@@ -19,6 +19,8 @@ flowchart LR
 | `hazard_core.py` | 計算核心（和 APP 的 `src/core/hazard.ts` 對應）；`background_rescale` 定義「平常」 |
 | `live_update.py` | 正式目錄之後的暫時資料：CWA 有感報告（需 `CWA_API_KEY`）＋ USGS；同參數重算到最近的 15 分鐘；評估缺口造成的低估 |
 | `export_feed.py` | 轉成 feed.json，寫出前用 `check_feed` 檢查（和手機端 `validateFeed` 相同的重點） |
+| `export_history.py` | 歷史回放（APP Phase 5）：重算過去大地震前後「當時」的 feed（只用每個時間點之前的資料，校準倍率也是），輸出到 APP 的 `public/history/`。需要完整目錄 `pipeline/data/events.parquet`（列表的地震與深度） |
+| `state_frequency.py` | 狀態門檻的回測統計：測試期每天、20 個縣市、APP 預設條件下各狀態出現的頻率 → `docs/reports/state_frequency.md` |
 
 ## 每 15 分鐘自動更新
 

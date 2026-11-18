@@ -141,6 +141,64 @@ class RecalibrationTest(unittest.TestCase):
                                1.0, delta=0.15)                                 # 發生率穩定時接近 1
 
 
+class UniformReferenceTest(unittest.TestCase):
+    """預報卡的「均勻值」：每格相同，總量用過去資料滾動校準，和回測的均勻對照同一個定義。"""
+
+    def setUp(self):
+        quiet = synthetic(n=3000, seed=20, start="1995-01-01", end="2010-01-01")
+        busy = synthetic(n=3000, seed=21, start="2010-01-01", end="2013-01-01")   # 發生率變成約 5 倍
+        self.ev = pd.concat([quiet, busy]).sort_values("time").reset_index(drop=True)
+        self.t0 = pd.Timestamp("2012-06-01")
+        self.n_cells = GRID.shape[0] * GRID.shape[1]
+        # 訓練期（只有平靜期）的每格每日發生率，和 fit() 的 uniform_rate_per_cell_day 同一個意思
+        days = (pd.Timestamp("2010-01-01") - pd.Timestamp("1995-01-01")).days
+        self.rate = 3000 / days / self.n_cells
+
+    def test_is_spatially_uniform_and_scales_with_horizon_before_calibration(self):
+        cat = hz.Catalog(self.ev, GRID, 3.5)
+        u7 = hz.uniform_expected_ref(cat, self.t0, 7.0, self.rate)
+        self.assertEqual(u7.shape, GRID.shape)
+        self.assertEqual(float(u7.max()), float(u7.min()))                       # 每格一樣
+        self.assertTrue(np.all(u7 > 0))
+
+    def test_calibration_follows_past_activity_and_is_clipped(self):
+        cat = hz.Catalog(self.ev, GRID, 3.5)
+        u = hz.uniform_expected_ref(cat, self.t0, 7.0, self.rate)
+        raw = self.rate * 7.0
+        self.assertGreater(float(u[0, 0]) / raw, 1.8)                            # 近兩年變活躍 → 倍率明顯大於 1
+        self.assertLessEqual(float(u[0, 0]) / raw, 3.0 + 1e-12)                  # 上限 3
+        quiet_cat = hz.Catalog(self.ev[self.ev["time"] < "2010-01-01"], GRID, 3.5)
+        u_quiet = hz.uniform_expected_ref(quiet_cat, pd.Timestamp("2009-06-01"), 7.0, self.rate)
+        self.assertAlmostEqual(float(u_quiet[0, 0]) / raw, 1.0, delta=0.15)      # 穩定期接近 1
+
+    def test_uses_past_only(self):
+        cat = hz.Catalog(self.ev, GRID, 3.5)
+        base = hz.uniform_expected_ref(cat, self.t0, 7.0, self.rate)
+        ev2 = self.ev.copy()
+        ev2.loc[ev2["time"] >= self.t0, "lat"] = 99.0                            # 把未來的事件移出區外
+        moved = hz.uniform_expected_ref(hz.Catalog(ev2, GRID, 3.5), self.t0, 7.0, self.rate)
+        np.testing.assert_allclose(moved, base, rtol=0, atol=1e-15)
+
+    def test_uses_same_windows_and_calibration_as_trailing_factor(self):
+        """窗的取法與 `trailing_factor` 相同（自 t0 − T 起每 7 天往回、730 天內），校準用同一個函式。
+
+        注意：回測（06_hazard_model）的窗錨在固定的每週格點上，前瞻版錨在發布時間，
+        兩者定義相同但窗的起點可以差幾天，數字不會逐位相同。"""
+        cat = hz.Catalog(self.ev, GRID, 3.5)
+        T = 14.0
+        h = np.timedelta64(int(round(T * 86400)), "s")
+        step = np.timedelta64(7 * 86400, "s")
+        t0 = np.datetime64(self.t0, "us")
+        t, pred, obs = t0 - h, 0.0, 0.0
+        while t >= t0 - np.timedelta64(730 * 86400, "s"):
+            pred += self.rate * T * self.n_cells
+            obs += float(cat.counts(t, t + h).sum())
+            t = t - step
+        expect = self.rate * T * hz.recalibration_factor(pred, obs)
+        got = hz.uniform_expected_ref(cat, self.t0, T, self.rate)
+        self.assertAlmostEqual(float(got[0, 0]), expect, places=12)
+
+
 class FitTest(unittest.TestCase):
     def test_fit_mu_k_recovers_linear_mix(self):
         rng = np.random.default_rng(7)

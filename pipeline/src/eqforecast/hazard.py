@@ -218,6 +218,31 @@ def trailing_factor(cat, t0, horizon_days, prm, trailing_days=730.0, step_days=7
     return recalibration_factor(pred, obs)
 
 
+def uniform_expected_ref(cat, t0, horizon_days, rate_per_cell_day, trailing_days=730.0, step_days=7.0):
+    """均勻對照：每格相同的 N(T, ≥m_ref)，總量用和 `trailing_factor` 相同的滾動校準。
+
+    為什麼這樣定義：回測的「增益（對均勻）」用的就是這個對照（06_hazard_model.py，審查 M4）：
+    訓練期的每格每日發生率 × T，再乘上同一套滾動校準倍率。預報卡要拿同一個基準比較，
+    不然前瞻分數和回測分數用的不是同一把尺。
+    和 `trailing_factor` 的差別只在「預測」是常數（每個窗的預測總數都是 rate × T × 格數）。
+    只用 t0 之前已經結束的窗，不偷看未來。
+    """
+    n_cells = cat.grid.shape[0] * cat.grid.shape[1]
+    per_window = float(rate_per_cell_day) * horizon_days * n_cells
+    t0 = np.datetime64(t0, "us")
+    h = np.timedelta64(int(round(horizon_days * 86400)), "s")
+    step = np.timedelta64(int(round(step_days * 86400)), "s")
+    lo = t0 - np.timedelta64(int(round(trailing_days * 86400)), "s")
+    pred = obs = 0.0
+    t = t0 - h
+    while t >= lo:
+        pred += per_window
+        obs += float(cat.counts(t, t + h).sum())
+        t = t - step
+    f = recalibration_factor(pred, obs)
+    return np.full(cat.grid.shape, float(rate_per_cell_day) * horizon_days * f)
+
+
 def scale_magnitude(n_ref, m, m_ref, b):
     """把 M≥m_ref 的期望次數換算成 M≥m。"""
     return np.asarray(n_ref, float) * 10 ** (-b * (m - m_ref))

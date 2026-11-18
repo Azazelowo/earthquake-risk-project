@@ -26,6 +26,14 @@ flowchart LR
 APP 讀 `https://raw.githubusercontent.com/<repo>/feed/feed.json`。需要在 repo 的
 Settings → Secrets and variables → Actions 設定 `CWA_API_KEY`；沒設時只用 USGS（M4 以上）。
 
+**實際由外部服務觸發（2026-11-18 起）**：GitHub 內建排程實測不可靠（上線後數小時一次都沒自動執行，同 repo 其他排程也晚 3～9 小時），
+所以由使用者在 cron-job.org 設定每 15 分鐘呼叫 GitHub 的 `workflow_dispatch` API（`hourly-feed.yml`、ref `main`）。
+權杖是使用者自建的 fine-grained token：只限這個 repo、只有 Actions 讀寫，不在任何 repo 裡。工作流程內的 cron 保留當備援，
+兩邊同時觸發會依序執行（`concurrency`），結果相同。
+
+**會讓更新停掉的事**：工作流程改檔名或拿掉 `workflow_dispatch`；權杖到期（到時重建並換到 cron-job.org）；cron-job.org 停用這個工作。
+發生時 APP 會在 1 小時後顯示「資料已過期」。
+
 ## 本機執行
 
 ```bash

@@ -90,7 +90,7 @@ flowchart LR
 
 | 項目 | 設定（草案） |
 |---|---|
-| 發布頻率 | 每日 1 次，取台北時間 08:00 之後第一次 feed（UTC 00:00 整點的快照） |
+| 發布頻率 | 每日 1 批：UTC 00 時（台北 08 時）內的快照。feed 每 15 分鐘一個快照，所以實際是 00:00／00:15／00:30／00:45 之一（排程在 00:20 跑時通常是 00:15）；**每個 UTC 日期最多一批**（`append_batch` 強制，不只比對發布時間是否相同） |
 | 區域（6） | 全台網格；高雄（22.63°N, 120.30°E）、台北（25.04°N, 121.56°E）、宜蘭（24.75°N, 121.75°E）、花蓮（23.98°N, 121.60°E）、台東（22.76°N, 121.14°E），後五者半徑 50 km |
 | 規模（7） | ML ≥ 4、4.5、5、5.5、6、6.5、7（7 以上） |
 | 時間窗（9） | 1、2、3、5、7、10、14、20、30 天 |
@@ -356,7 +356,7 @@ repo 擁有者**技術上仍可重寫分支歷史**。能做的緩解：
 
 | 步驟 | 內容 | 失敗時 |
 |---|---|---|
-| 1 | 讀 `feed` 分支累積的暫時事件與抓取紀錄，用 `live_update` 重算到 UTC 00:00 的快照 | 整個工作失敗 |
+| 1 | 讀 `feed` 分支累積的暫時事件與抓取紀錄，用 `live_update` 重算到最近的 15 分鐘快照（UTC 00 時內） | 整個工作失敗 |
 | 2 | 發布標準卡（`forecast_card.py`） | 快照發布時間距現在超過 2 小時就**不發**，缺漏留在紀錄裡，不事後補算；同一天重跑只印「已發布過」並正常結束 |
 | 3 | 速判（`forecast_resolve.py resolve --stage speed`） | 沒有成功的抓取紀錄就明確失敗 |
 | 4 | 計分與模型狀態，寫成 `scores/speed.json`（標「暫時」） | — |
@@ -375,9 +375,11 @@ repo 擁有者**技術上仍可重寫分支歷史**。能做的緩解：
 
 1. 合併這個分支到 `main`（排程只會在預設分支上跑）。
 2. GitHub → Actions → **Forecast daily** → Run workflow，勾選 `init_branch`，建立空的 `forecasts` 分支。
-3. GitHub → Settings → Branches → 為 `forecasts` 新增保護規則：**禁止強制推送、禁止刪除**。（這是「預先登記」可信度的前提，見 §7.3。）
+3. 為 `forecasts` 新增保護規則：**禁止強制推送、禁止刪除**（Settings → Rules → Rulesets，或 Branches）。**新增之後要確認狀態是 Active**：GitHub 新增 ruleset 時預設是 Disabled，Disabled 的規則完全不生效；可用 `gh api repos/<repo>/rules/branches/forecasts` 檢查，要回傳含 `deletion` 與 `non_fast_forward` 的清單，回傳 `[]` 代表沒生效。（這是「預先登記」可信度的前提，見 §7.3。）
 4. 確認 §13 的發布前檢查清單**全部**通過。
 5. Settings → Secrets and variables → Actions → **Variables** → 新增 `FORECAST_ISSUE_ENABLED` = `true`。**這一步之後，下一次排程就會發出第一批標準卡，無法收回。**
+
+**排程觸發**：GitHub 內建排程在這個倉庫實測不可靠（`hourly-feed.yml` 已改由外部服務每 15 分鐘呼叫 `workflow_dispatch`）。`forecast-daily` 的 `schedule` 同樣可能延遲或被略過；超過 2 小時就不發當天的卡。若要穩定，可讓同一個外部服務在 UTC 00:20 呼叫這個工作流程的 `workflow_dispatch`（不帶 `init_branch`）；兩種觸發同一天都跑也沒關係，第二次會因為「當天已發布」直接略過。
 
 在第 5 步之前，排程每天都會被略過（`daily` 工作的條件是這個變數為 `true`），不會寫入任何東西。
 

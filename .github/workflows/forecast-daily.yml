@@ -8,7 +8,7 @@
 #   - 和 hourly-feed 不同，這裡**絕對不能強制推送**：feed 分支每小時只留一個提交，forecasts 分支要留下完整歷史。
 #
 # 每日工作做什麼（UTC 00:20，台北 08:20）：
-#   1. 讀 feed 分支累積的暫時事件與抓取紀錄，重算到 UTC 00:00 的快照（live_update）
+#   1. 讀 feed 分支累積的暫時事件與抓取紀錄，重算到最近的 15 分鐘快照（live_update；UTC 00 時內，通常是 00:15）
 #   2. 發布標準卡（forecast_card）。快照發布時間距現在超過 2 小時就不發，缺漏留在紀錄裡，不事後補算
 #   3. 裁決到期的卡：速判（forecast_resolve resolve）。定判要手動匯入 GDMS 正式目錄，不在排程裡
 #   4. 重算計分與模型狀態，寫成 scores/speed.json（速判，標「暫時」）
@@ -92,7 +92,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Update the snapshot to now (issue time = 00:00 UTC)
+      - name: Update the snapshot to now (issue time = latest 15 min, inside UTC hour 00)
         env:
           CWA_API_KEY: ${{ secrets.CWA_API_KEY }}
           PYTHONUTF8: "1"

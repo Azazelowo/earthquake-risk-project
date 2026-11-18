@@ -2,7 +2,7 @@
 
 > 版本：1.0（2026-11-09）
 > 對應甘特圖任務 **B2**（`02_clean_features.py`，原訂 10/16）
-> 格式沿用 SA&D 課程的需求規格（[Chapter01/需求規格說明.md](../Chapter01/需求規格說明.md)、[docs/uml/08_requirements_table.md](uml/08_requirements_table.md)），另外加上「狀態」欄與追溯表。
+> 格式沿用 SA&D 課程的需求規格（[Chapter01/需求規格說明.md](sad/legacy/Chapter01/需求規格說明.md)、[docs/uml/08_requirements_table.md](uml/08_requirements_table.md)），另外加上「狀態」欄與追溯表。
 
 **狀態圖例**：✅ 完成並以實際資料驗證　⏳ 程式完成、等待資料　🔶 部分完成　❌ 未開始　❓ 待使用者決定
 

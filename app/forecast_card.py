@@ -247,6 +247,11 @@ def _all_batches(registry_dir):
     return out
 
 
+def read_registry(registry_dir):
+    """整本登記簿（或裁決紀錄）：[(標頭, 卡片或裁決清單), …]，依發布時間排序。"""
+    return _all_batches(registry_dir)
+
+
 def verify_registry(registry_dir):
     """重算整條雜湊鏈。通過回傳統計；任何不符丟出 RegistryError（訊息說明是哪一批、哪裡不對）。"""
     registry_dir = Path(registry_dir)

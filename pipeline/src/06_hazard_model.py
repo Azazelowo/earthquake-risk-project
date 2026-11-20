@@ -38,7 +38,10 @@ MAGS = [3.0, 3.5, 4.0, 5.0, 6.0]
 HORIZONS = [1 / 24, 1.0, 7.0, 30.0]
 EXPORT_HORIZONS = [1 / 24, 3 / 24, 6 / 24, 0.5, 1, 2, 3, 7, 14, 30]
 TRAILING_DAYS = 730            # 滾動校準回看的天數
-MODEL_VERSION = "v1.1"         # v1.2 研究中（見 docs/reports/hazard_v1_2_findings.md），尚未套用；v1.1：事件母體統一、搜尋範圍放寬、均勻對照校準
+MODEL_VERSION = "v1.1"         # 給 --early-params 時改成 v1.2（主震後早期反應，見 docs/reports/hazard_v1_2_findings.md）；
+                               # v1.1：事件母體統一、搜尋範圍放寬、均勻對照校準
+EARLY_KEYS = ("alpha", "young_days", "deep_km", "boost_amp")
+SHAPE_KEYS = ("b", "mu", "K", "p", "c", "sigma_st", "sigma_bg", "floor_frac", "lookback_days", "m_ref")
 
 plt.rcParams["font.sans-serif"] = ["Microsoft JhengHei", "Noto Sans CJK TC", "DejaVu Sans"]
 plt.rcParams["axes.unicode_minus"] = False
@@ -167,7 +170,13 @@ def write_report(prm, info, bt, latest_t0, args, maps, ev_info):
     L = [f"# 連續式風險函數 {MODEL_VERSION}：回測報告", "",
          f"> 由 `pipeline/src/06_hazard_model.py` 產生（{pd.Timestamp.now():%Y-%m-%d %H:%M}）。重新執行會覆寫本檔。", "",
          "> **v1.1 的修正（2026-11-17 審查）**：① 事件母體統一（M1）② 形狀參數搜尋範圍放寬，並檢查是否落在邊界（M3）"
-         "③ 均勻對照也做滾動校準（M4）。v1 的數字不能和本版直接比較。", "",
+         "③ 均勻對照也做滾動校準（M4）。v1 的數字不能和本版直接比較。", ""]
+    if prm.young_days > 0:
+        L += ["> **v1.2（2026-11-21）**：大地震剛發生、自己的餘震還沒進目錄時，依規模加權（alpha）；加權在預報窗內"
+              f"以 exp(−年紀 / {prm.young_days:g} 天) 遞減，之後和 v1.1 相同；深度 > {prm.deep_km:g} km 不加權。"
+              "這幾個參數只用訓練期主震選（`08_mainshock_response.py --fit-early`），"
+              "主震後的檢驗見 `docs/reports/hazard_mainshock_response.md`，原因見 `docs/reports/hazard_v1_2_findings.md`。", ""]
+    L += [
          "## 這個模型回答什麼", "",
          "「從現在起 T 這麼久之內，這一格發生規模 m 以上地震的機率是多少？」m 與 T 都可以任意指定。",
          "做法是先估每格的發生率（以前常震的地方 ＋ 最近剛震過的地方），再用規模分布與時間長度換算。",
@@ -179,7 +188,9 @@ def write_report(prm, info, bt, latest_t0, args, maps, ev_info):
          f"{info['n_events']} 個 M≥{prm.m_ref:g} 地震",
          f"- 測試期 {args.test_start} ～ {pd.Timestamp(args.test_end):%Y-%m-%d}",
          f"- b 值 {prm.b:.3f}（只用訓練期結束前的地震）",
-         f"- 背景倍率 mu = {prm.mu:.3f}；近期加成 K = {prm.K:.4g}、alpha = {prm.alpha:g}、p = {prm.p:g}、c = {prm.c:g} 天",
+         f"- 背景倍率 mu = {prm.mu:.3f}；近期加成 K = {prm.K:.4g}、p = {prm.p:g}、c = {prm.c:g} 天；"
+         + (f"主震後早期反應 alpha = {prm.alpha:g}、倍率 A = {prm.boost_amp:g}、衰減 {prm.young_days:g} 天"
+            f"（7 天窗的擬合本身選 alpha = 0）" if prm.young_days > 0 else f"alpha = {prm.alpha:g}"),
          f"- 平滑寬度：背景 {prm.sigma_bg:g} 格、近期 {prm.sigma_st:g} 格（一格 0.2°）；"
          f"近期加成隨規模放大 d_frac = {prm.d_frac:g}（寬度² = 近期² + (d_frac × 破裂長度)²，"
          "破裂長度 L(M) = 0.01×10^(0.5M) km；d_frac = 0 即 v1.1 的固定寬度）",
@@ -205,7 +216,8 @@ def write_report(prm, info, bt, latest_t0, args, maps, ev_info):
           f"## 最新一期（發布時間 {pd.Timestamp(latest_t0):%Y-%m-%d}，即目錄最後一天的隔日）", ""]
     L += [f"![{m}]({m})\n" for m in maps]
     L += ["## 已知限制", "",
-          "1. 近期加成的技巧主要來自「大地震後會有餘震」，這是已知規律，不是預測主震。",
+          "1. 近期加成的技巧主要來自「大地震後會有餘震」，這是已知規律，不是預測主震。"
+          "v1.2 改善的只有大地震剛發生後的幾小時；主震之前模型無法指出哪一次地震會是大地震。",
           f"2. **總數校準**：參數只用 7 天的窗擬合，直接套到其他時間長度會低估地震總數（見「校準前」欄）。"
           f"現在每次發布前，會回看過去 {TRAILING_DAYS} 天內已經結束的預報窗，用「實際 ÷ 預測」修正整體倍率"
           "（限制在 0.5–3 倍，只用過去資料）。這只修正全區總量，不改變各格的相對高低；"
@@ -221,7 +233,7 @@ def write_report(prm, info, bt, latest_t0, args, maps, ev_info):
 
 
 def main():
-    global REPORT
+    global REPORT, MODEL_VERSION
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--events", default=str(DATA / "events.parquet"))
     ap.add_argument("--train-start", default="1995-01-01")
@@ -236,6 +248,8 @@ def main():
     ap.add_argument("--deep-kms", default="0",
                     help="deep_km 的搜尋值（逗號分隔），例如 0,40；預設 0 = 全部地震都套用 alpha（v1.1）")
     ap.add_argument("--report", default=str(REPORT), help="報告資料夾")
+    ap.add_argument("--early-params", default=None,
+                    help="08_mainshock_response.py --fit-early 輸出的 params.json：套上主震後早期反應的參數（v1.2）")
     ap.add_argument("--event-quality", choices=hz.EVENT_QUALITIES, default="located",
                     help="located（預設）＝只用 gap ≤ 110° 的事件；all＝v1 的舊行為，只供比較")
     args = ap.parse_args()
@@ -255,6 +269,16 @@ def main():
                                  deep_kms=tuple(float(x) for x in args.deep_kms.split(",")))
     print(f"b = {prm.b:.3f}；mu = {prm.mu:.3f}、K = {prm.K:.4g}、alpha = {prm.alpha}、p = {prm.p}、"
           f"sigma_bg = {prm.sigma_bg}、sigma_st = {prm.sigma_st}、d_frac = {prm.d_frac}、deep_km = {prm.deep_km}")
+    if args.early_params:
+        early = json.loads(Path(args.early_params).read_text(encoding="utf-8"))
+        # early 參數是在某一組形狀參數上選的；形狀參數不一致時（例如目錄改了），必須重跑 --fit-early
+        bad = [k for k in SHAPE_KEYS if not np.isclose(early["params"][k], prm.to_dict()[k], rtol=1e-4)]
+        if bad:
+            raise SystemExit(f"--early-params 的形狀參數和這次擬合不一致：{bad}；請先重跑 08 --fit-early")
+        prm = hz.HazardParams(**{**prm.to_dict(), **{k: float(early["params"][k]) for k in EARLY_KEYS}})
+        info["early_fit"] = early.get("early_fit")
+        MODEL_VERSION = "v1.2"
+        print(f"套用主震後早期反應：" + "、".join(f"{k} = {getattr(prm, k):g}" for k in EARLY_KEYS))
     print(f"訓練期對數概似：完整 {info['ll_full']:.1f}、只有背景 {info['ll_bg_only']:.1f}（{info['n_events']} 個地震）")
     if info["boundary_hits"]:
         print("注意：最佳值落在搜尋範圍邊界：" + "、".join(f"{n}={v:g}（{s}）" for n, v, s in info["boundary_hits"]))

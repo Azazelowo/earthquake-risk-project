@@ -57,7 +57,8 @@ def main():
     model_ev, _ = hz.load_events(args.events, quality)
     in_grid = model_ev["lat"].between(g["lat_min"], g["lat_max"]) & model_ev["lon"].between(g["lon_min"], g["lon_max"])
     base = model_ev[in_grid & (model_ev["ml"] >= m_ref) & (model_ev["time"] < issue)].sort_values("time")
-    base[["time", "lat", "lon", "ml"]].to_csv(out / "catalog_base.csv", index=False, float_format="%.4f",
+    # depth：v1.2 起深源地震（> deep_km）不套用規模加權，即時更新需要深度
+    base[["time", "lat", "lon", "ml", "depth"]].to_csv(out / "catalog_base.csv", index=False, float_format="%.4f",
                                               date_format="%Y-%m-%d %H:%M:%S")
     catalog_end = ev.loc[ev["time"] < issue, "time"].max()
     keep = ((ev["time"] < issue) & (ev["time"] >= issue - pd.Timedelta(days=args.event_days))

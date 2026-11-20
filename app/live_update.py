@@ -292,10 +292,12 @@ def update(now=None, base_dir=BASE_DIR, live_dir=LIVE_DIR, network=True, cwa_key
                  & store["lat"].between(grid["lat_min"], grid["lat_max"])
                  & store["lon"].between(grid["lon_min"], grid["lon_max"])]
     prov = typed(merge_sources(prov)) if len(prov) else prov
-    cols = ["time", "lat", "lon", "ml"]
+    # depth：v1.2 起深源地震不套用規模加權；舊快照沒有這欄時補 NaN（當成淺層，寧可高估）
+    cols = ["time", "lat", "lon", "ml", "depth"]
+    base_events = base_events.reindex(columns=cols)
     events = pd.concat([base_events[cols]] + ([prov[cols]] if len(prov) else []), ignore_index=True)
     events["time"] = pd.to_datetime(events["time"])
-    for c in ("lat", "lon", "ml"):
+    for c in ("lat", "lon", "ml", "depth"):
         events[c] = events[c].astype("float64")
 
     latest = compute_hazard(events, params, t0)

@@ -160,9 +160,29 @@ class MagnitudeKernelTest(unittest.TestCase):
         shallow, deep, nan = young[cell(23.5, 121.5)], young[cell(22.5, 120.5)], young[cell(24.5, 121.0)]
         self.assertGreater(shallow / deep, 1000)      # 淺層 M7 有 10^(1×3.5) 的加權，深源 M7 沒有
         self.assertAlmostEqual(deep, nan, delta=deep * 0.05)   # 深度缺值當淺層，但 M3.5 本來就沒有加權
-        old = hz.short_term(cat, "2020-01-02", *args, deep_km=40.0, young_days=0.5)   # 1 天後：超過 young_days
-        ref = hz.short_term(cat, "2020-01-02", 7, 0.0, 0.01, 1.1, 0.5, 365, 3.5)
-        np.testing.assert_allclose(old, ref)          # 和 alpha = 0（v1.1）完全相同
+        old = hz.short_term(cat, "2020-01-31", *args, deep_km=40.0, young_days=0.5)   # 30 天後：額外貢獻已衰減殆盡
+        ref = hz.short_term(cat, "2020-01-31", 7, 0.0, 0.01, 1.1, 0.5, 365, 3.5)
+        np.testing.assert_allclose(old, ref, rtol=1e-6)   # 和 alpha = 0（v1.1）相同
+
+    def test_decayed_integral_matches_numeric_and_limits(self):
+        s = np.linspace(0.04, 7.04, 700001)
+        y = np.exp(-s / 0.5) * (s + 0.01) ** (-1.1)
+        num = float(np.sum((y[1:] + y[:-1]) / 2 * np.diff(s)))
+        got = float(hz.decayed_omori_integral(np.array([0.04]), 7.0, 0.01, 1.1, 0.5)[0])
+        self.assertAlmostEqual(got, num, delta=num * 1e-4)
+        long_tau = float(hz.decayed_omori_integral(np.array([0.04]), 7.0, 0.01, 1.1, 1e9)[0])
+        self.assertAlmostEqual(long_tau, float(hz.omori_integral(0.04, 7.0, 0.01, 1.1)), places=6)
+
+    def test_boost_fades_inside_the_window(self):
+        """主震後 1 小時發布：看 7 天時，額外貢獻只占前面一小段，所以比「全額 7 天」小很多。"""
+        ev = pd.DataFrame({"time": pd.to_datetime(["2020-01-01"]), "lat": [23.5], "lon": [121.5], "ml": [7.0],
+                           "depth": [10.0]})
+        cat = hz.Catalog(ev, GRID, 3.5)
+        decayed = hz.short_term(cat, "2020-01-01 01:00", 7, 0.8, 0.01, 1.1, 0.5, 365, 3.5, young_days=0.5).sum()
+        full = hz.short_term(cat, "2020-01-01 01:00", 7, 0.8, 0.01, 1.1, 0.5, 365, 3.5).sum()
+        one_day = hz.short_term(cat, "2020-01-01 01:00", 1, 0.8, 0.01, 1.1, 0.5, 365, 3.5).sum()
+        self.assertLess(decayed, 0.9 * full)
+        self.assertLess(decayed, one_day * 1.05)   # 7 天的量大約只比 1 天多一點點
 
 
 class RecalibrationTest(unittest.TestCase):

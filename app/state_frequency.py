@@ -68,21 +68,25 @@ def ratios(start, end, base_dir=BASE_DIR, hour_utc=0, log=print):
     params = lu.load_params(base_dir)
     prm, grid = lu.hazard_params(params), lu.grid_of(params)
     cat = hz.Catalog(lu.read_base_catalog(base_dir), grid, prm.m_ref)
-    rescale = hc.background_rescale(params)
+    # 「平常」＝只有背景的模型、用它自己的滾動校準倍率，和 APP 的 n_bg（06 匯出、審查 M5）相同。
+    # 2026-11-21 修正：原本是「完整模型的背景項 × 完整模型的倍率 × background_rescale」，新版快照的
+    # background_rescale 回傳 1（它假設 n_bg 已經換好），這裡卻是自己重算的，「平常」因此低估約 2.6 倍。
+    bgp = hz.bg_only_params(prm, params["fit_info"]["mu_bg_only"])
+    trailing = float(params.get("calibration_trailing_days", 730))
     scale = 10.0 ** (-prm.b * (M - prm.m_ref))
     weights = county_weights(params)
     days = pd.date_range(pd.Timestamp(start) + pd.Timedelta(hours=hour_utc), pd.Timestamp(end), freq="D")
-    rows, factor, month = [], None, None
+    rows, factor, factor_bg, month = [], None, None, None
     for i, t0 in enumerate(days):
         if (t0.year, t0.month) != month:
             month = (t0.year, t0.month)
-            factor = hz.trailing_factor(cat, t0, T_DAYS, prm,
-                                        trailing_days=float(params.get("calibration_trailing_days", 730)))
+            factor = hz.trailing_factor(cat, t0, T_DAYS, prm, trailing_days=trailing)
+            factor_bg = hz.trailing_factor(cat, t0, T_DAYS, bgp, trailing_days=trailing)
             if t0.month == 1:
                 log(f"{t0.date()}：校準倍率 {factor:.3f}（{i}/{len(days)} 天）")
         a, b = hz.expected_ref(cat, t0, T_DAYS, prm)
         full = (a + b).ravel() * factor
-        bg = a.ravel() * factor * rescale
+        bg = hz.expected_ref(cat, t0, T_DAYS, bgp)[0].ravel() * factor_bg
         for name, w in weights.items():
             p = float(-np.expm1(-(w * full).sum() * scale))
             pb = float(-np.expm1(-(w * bg).sum() * scale))

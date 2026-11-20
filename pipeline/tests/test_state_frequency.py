@@ -41,11 +41,10 @@ class TestStateFrequency(unittest.TestCase):
         self.assertEqual(len(df), 40)
         np.testing.assert_allclose(df["ratio"], df["p"] / df["p_bg"])
         hualien = df[df["county"] == "花蓮縣"].set_index("issue_time")["ratio"]
-        # 2024 花蓮地震（台灣時間 07:58）後 2 分鐘的 08:00 發布：只升高一點（alpha＝0，餘震還沒進來）；
-        # 隔天 08:00：餘震陸續算進來，明顯高於平常
-        self.assertGreater(hualien.iloc[0], 1.0)
+        # 2024 花蓮地震（台灣時間 07:58）後 2 分鐘的 08:00 發布：v1.2 依規模先估計餘震，已經遠高於平常
+        # （v1.1 的 alpha＝0 時只有約 1.8 倍）；隔天 08:00：規模加權已衰減，改由實際的餘震撐住，仍明顯高於平常
+        self.assertGreater(hualien.iloc[0], 5)
         self.assertGreater(hualien.iloc[1], 3)
-        self.assertGreater(hualien.iloc[1], hualien.iloc[0])
 
 
 if __name__ == "__main__":

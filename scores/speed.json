@@ -1,0 +1,16 @@
+{
+ "stage": "速判",
+ "as_of": "2026-11-20T07:16:39Z",
+ "resolved_cards": 0,
+ "groups": 0,
+ "status_counts": {},
+ "provisional": true,
+ "note": "速判用暫時目錄，母體未篩定位品質、可能漏事件；模型狀態以定判為準",
+ "thresholds": {
+  "eval_days": 90,
+  "min_events": 20,
+  "month_days": 30,
+  "ntest_alpha": 0.025
+ },
+ "results": []
+}

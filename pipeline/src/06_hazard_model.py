@@ -38,7 +38,7 @@ MAGS = [3.0, 3.5, 4.0, 5.0, 6.0]
 HORIZONS = [1 / 24, 1.0, 7.0, 30.0]
 EXPORT_HORIZONS = [1 / 24, 3 / 24, 6 / 24, 0.5, 1, 2, 3, 7, 14, 30]
 TRAILING_DAYS = 730            # 滾動校準回看的天數
-MODEL_VERSION = "v1.1"         # v1.1（2026-11-17）：事件母體統一、搜尋範圍放寬、均勻對照校準
+MODEL_VERSION = "v1.1"         # v1.2 研究中（見 docs/reports/hazard_v1_2_findings.md），尚未套用；v1.1：事件母體統一、搜尋範圍放寬、均勻對照校準
 
 plt.rcParams["font.sans-serif"] = ["Microsoft JhengHei", "Noto Sans CJK TC", "DejaVu Sans"]
 plt.rcParams["axes.unicode_minus"] = False
@@ -180,7 +180,11 @@ def write_report(prm, info, bt, latest_t0, args, maps, ev_info):
          f"- 測試期 {args.test_start} ～ {pd.Timestamp(args.test_end):%Y-%m-%d}",
          f"- b 值 {prm.b:.3f}（只用訓練期結束前的地震）",
          f"- 背景倍率 mu = {prm.mu:.3f}；近期加成 K = {prm.K:.4g}、alpha = {prm.alpha:g}、p = {prm.p:g}、c = {prm.c:g} 天",
-         f"- 平滑寬度：背景 {prm.sigma_bg:g} 格、近期 {prm.sigma_st:g} 格（一格 0.2°）",
+         f"- 平滑寬度：背景 {prm.sigma_bg:g} 格、近期 {prm.sigma_st:g} 格（一格 0.2°）；"
+         f"近期加成隨規模放大 d_frac = {prm.d_frac:g}（寬度² = 近期² + (d_frac × 破裂長度)²，"
+         "破裂長度 L(M) = 0.01×10^(0.5M) km；d_frac = 0 即 v1.1 的固定寬度）",
+         f"- 深源地震：深度 > {prm.deep_km:g} km 的地震不套用 alpha（0 = 全部套用，即 v1.1）" if prm.deep_km > 0
+         else "- 深源地震：全部地震都套用 alpha（v1.1 的作法）",
          f"- 形狀參數的搜尋範圍：{grid_txt}。{hit_txt}", "",
          "## 回測結果（測試期）", "",
          "- **三個模型（完整、只有背景、均勻）都用同一套滾動校準**，所以增益比較的是空間與時間的分布，"
@@ -207,8 +211,8 @@ def write_report(prm, info, bt, latest_t0, args, maps, ev_info):
           "（限制在 0.5–3 倍，只用過去資料）。這只修正全區總量，不改變各格的相對高低；"
           "大地震剛發生後的幾週，倍率來不及反應，仍可能低估。",
           "3. 大森定律的 c 固定，沒有擬合；形狀參數用格點搜尋（全部組合見 `pipeline/data/hazard/fit_grid.csv`）。"
-          "近期加成的空間平滑寬度和規模無關，但大地震的餘震區其實大很多（M7 約上百公里）；"
-          "若 alpha（規模對餘震數的影響）仍偏小或落在下限，我們推測原因是這個簡化，而不是大地震真的不太產生餘震（尚未驗證；驗證方法是讓平滑寬度隨規模放大後重新擬合）。",
+          "v1.1 的近期加成平滑寬度和規模無關，alpha 落在下限 0；v1.2 讓寬度隨破裂長度放大（d_frac），"
+          "擬合仍選 d_frac = 0、alpha = 0（假設被否定）；主震後低估改由 young_days 處理，見 `docs/reports/hazard_v1_2_findings.md`。",
           "4. 事件母體只含地震網能良好定位的地震（gap ≤ 110° 或未知）。外海 gap 大的地震（含部分大地震）"
           "不在模型裡，所以外海的機率代表「能被良好定位的地震」，實際會偏低。",
           "5. 尚未加入地磁、TEC 等前兆；這一版是之後檢驗前兆時的對照基準。", ""]
@@ -217,6 +221,7 @@ def write_report(prm, info, bt, latest_t0, args, maps, ev_info):
 
 
 def main():
+    global REPORT
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--events", default=str(DATA / "events.parquet"))
     ap.add_argument("--train-start", default="1995-01-01")
@@ -226,9 +231,15 @@ def main():
     ap.add_argument("--m-ref", type=float, default=3.5)
     ap.add_argument("--fit-horizon", type=float, default=7.0)
     ap.add_argument("--out", default=str(DATA / "hazard"))
+    ap.add_argument("--d-fracs", default="0",
+                    help="d_frac 的搜尋值（逗號分隔），例如 0,0.5,1,2；預設 0 = v1.1 的固定寬度")
+    ap.add_argument("--deep-kms", default="0",
+                    help="deep_km 的搜尋值（逗號分隔），例如 0,40；預設 0 = 全部地震都套用 alpha（v1.1）")
+    ap.add_argument("--report", default=str(REPORT), help="報告資料夾")
     ap.add_argument("--event-quality", choices=hz.EVENT_QUALITIES, default="located",
                     help="located（預設）＝只用 gap ≤ 110° 的事件；all＝v1 的舊行為，只供比較")
     args = ap.parse_args()
+    REPORT = Path(args.report)
 
     events, ev_info = hz.load_events(args.events, args.event_quality)
     print(f"事件：{ev_info['quality']}，使用 {ev_info['n_used']:,} / {ev_info['n_all']:,} 筆")
@@ -239,9 +250,11 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
 
     prm, grid_log, info = hz.fit(events, grid, args.train_start, args.train_end, m_ref=args.m_ref,
-                                 horizon_days=args.fit_horizon)
+                                 horizon_days=args.fit_horizon,
+                                 d_fracs=tuple(float(x) for x in args.d_fracs.split(",")),
+                                 deep_kms=tuple(float(x) for x in args.deep_kms.split(",")))
     print(f"b = {prm.b:.3f}；mu = {prm.mu:.3f}、K = {prm.K:.4g}、alpha = {prm.alpha}、p = {prm.p}、"
-          f"sigma_bg = {prm.sigma_bg}、sigma_st = {prm.sigma_st}")
+          f"sigma_bg = {prm.sigma_bg}、sigma_st = {prm.sigma_st}、d_frac = {prm.d_frac}、deep_km = {prm.deep_km}")
     print(f"訓練期對數概似：完整 {info['ll_full']:.1f}、只有背景 {info['ll_bg_only']:.1f}（{info['n_events']} 個地震）")
     if info["boundary_hits"]:
         print("注意：最佳值落在搜尋範圍邊界：" + "、".join(f"{n}={v:g}（{s}）" for n, v, s in info["boundary_hits"]))

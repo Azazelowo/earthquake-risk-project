@@ -117,6 +117,54 @@ class BehaviourTest(unittest.TestCase):
             prev = a + b
 
 
+class MagnitudeKernelTest(unittest.TestCase):
+    """v1.2：近期加成的平滑寬度隨規模放大（d_frac）。"""
+
+    def _cat(self, ml):
+        ev = pd.DataFrame({"time": pd.to_datetime(["2020-01-01 00:00", "2020-01-01 06:00"]),
+                           "lat": [23.5, 22.3], "lon": [121.5, 120.3], "ml": [ml, 3.6]})
+        return hz.Catalog(ev, GRID, 3.5)
+
+    def test_zero_d_frac_is_exactly_the_fixed_kernel(self):
+        cat = self._cat(7.0)
+        a = hz.short_term(cat, "2020-01-02", 7, 0.8, 0.01, 1.1, 0.5, 365, 3.5)
+        b = hz.short_term(cat, "2020-01-02", 7, 0.8, 0.01, 1.1, 0.5, 365, 3.5, d_frac=0.0)
+        np.testing.assert_array_equal(a, b)
+        prm = hz.HazardParams(K=1.0, alpha=0.8, p=1.1)
+        self.assertEqual(prm.d_frac, 0.0)   # 舊的 params.json 沒有這欄，讀進來就是 v1.1 的行為
+
+    def test_large_event_spreads_wider_and_total_is_kept(self):
+        cat = self._cat(7.0)
+        fixed = hz.short_term(cat, "2020-01-02", 7, 0.8, 0.01, 1.1, 0.5, 365, 3.5)
+        wide = hz.short_term(cat, "2020-01-02", 7, 0.8, 0.01, 1.1, 0.5, 365, 3.5, d_frac=2.0)
+        self.assertAlmostEqual(fixed.sum(), wide.sum(), places=6)
+        i, j, _ = GRID.cell_index([23.5], [121.5])
+        self.assertLess(wide[i[0], j[0]], fixed[i[0], j[0]])            # 震央格變少
+        ring = (slice(i[0] - 4, i[0] + 5), slice(j[0] - 4, j[0] + 5))
+        self.assertGreater(wide.sum() - wide[ring].sum(), fixed.sum() - fixed[ring].sum())   # 外圍變多
+
+    def test_small_event_kernel_barely_changes(self):
+        km = hz.cell_km(GRID)
+        self.assertLess(abs(float(hz.kernel_sigma(4.0, 0.5, 2.0, km)) - 0.5), 0.02)
+        self.assertGreater(float(hz.kernel_sigma(7.25, 0.5, 2.0, km)), 3.0)
+        self.assertAlmostEqual(float(hz.rupture_km(7.0)), 31.62, places=1)
+
+    def test_deep_and_old_events_get_no_magnitude_weight(self):
+        ev = pd.DataFrame({"time": pd.to_datetime(["2020-01-01", "2020-01-01", "2020-01-01"]),
+                           "lat": [23.5, 22.5, 24.5], "lon": [121.5, 120.5, 121.0], "ml": [7.0, 7.0, 3.5],
+                           "depth": [10.0, 120.0, np.nan]})
+        cat = hz.Catalog(ev, GRID, 3.5)
+        args = (7, 1.0, 0.01, 1.1, 0.5, 365, 3.5)
+        young = hz.short_term(cat, "2020-01-01 00:02", *args, deep_km=40.0, young_days=0.5)
+        cell = lambda la, lo: tuple(int(x[0]) for x in GRID.cell_index([la], [lo])[:2])
+        shallow, deep, nan = young[cell(23.5, 121.5)], young[cell(22.5, 120.5)], young[cell(24.5, 121.0)]
+        self.assertGreater(shallow / deep, 1000)      # 淺層 M7 有 10^(1×3.5) 的加權，深源 M7 沒有
+        self.assertAlmostEqual(deep, nan, delta=deep * 0.05)   # 深度缺值當淺層，但 M3.5 本來就沒有加權
+        old = hz.short_term(cat, "2020-01-02", *args, deep_km=40.0, young_days=0.5)   # 1 天後：超過 young_days
+        ref = hz.short_term(cat, "2020-01-02", 7, 0.0, 0.01, 1.1, 0.5, 365, 3.5)
+        np.testing.assert_allclose(old, ref)          # 和 alpha = 0（v1.1）完全相同
+
+
 class RecalibrationTest(unittest.TestCase):
     def test_factor_is_ratio_with_shrinkage_and_clipping(self):
         self.assertAlmostEqual(hz.recalibration_factor(100.0, 200.0, prior=0.0), 2.0)

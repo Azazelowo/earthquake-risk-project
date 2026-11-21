@@ -39,11 +39,14 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(self.by[("KHH", 5.0, 7)]["id"], "F-20260930T0000-standard-KHH-M5-7d")
 
     def test_probabilities_are_valid_and_consistent_with_expected_counts(self):
+        # 機率＝1 − exp(−期望數 ÷ kappa)（複合卜瓦松；快照沒有 kappa 時＝1）
+        kappa = float((json.loads((ROOT / "app" / "data" / "params.json").read_text(encoding="utf-8"))
+                       .get("probability") or {}).get("kappa", 1.0))
         for c in self.cards:
             for p, n in (("p", "n"), ("pb", "nb"), ("pu", "nu")):
                 self.assertTrue(0.0 <= c[p] <= 1.0, c["id"])
                 self.assertGreaterEqual(c[n], 0.0, c["id"])
-                self.assertAlmostEqual(c[p], float(f"{-np.expm1(-c[n]):.6g}"), delta=1e-5 + 1e-5 * c[p], msg=c["id"])
+                self.assertAlmostEqual(c[p], float(f"{-np.expm1(-c[n] / kappa):.6g}"), delta=1e-5 + 1e-5 * c[p], msg=c["id"])
 
     def test_probability_falls_with_magnitude_and_rises_with_window(self):
         for r in ("TW", "KHH", "HUA"):

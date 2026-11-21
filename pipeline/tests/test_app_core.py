@@ -141,3 +141,28 @@ class TestHazardCore(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class KappaTest(unittest.TestCase):
+    """機率換算的群聚係數 kappa（複合卜瓦松，docs/reports/probability_calibration.md）。"""
+
+    def test_probability_with_kappa(self):
+        import hazard_core as hc
+        self.assertAlmostEqual(float(hc.probability(0.5)), 1 - np.exp(-0.5), places=12)
+        self.assertAlmostEqual(float(hc.probability(0.5, 2.0)), 1 - np.exp(-0.25), places=12)
+        self.assertLess(float(hc.probability(0.5, 1.8)), float(hc.probability(0.5)))
+
+    def test_snapshot_kappa_default_and_reverse_lookup(self):
+        import hazard_core as hc
+        cells = pd.DataFrame({"lat_bin": [23.0], "lon_bin": [121.0]})
+        base = {"grid": {"lat_min": 21, "lat_max": 26, "lon_min": 119, "lon_max": 123, "deg": 0.2},
+                "params": {"b": 1.0, "m_ref": 3.5}, "issue_time": "2026-01-01"}
+        snap1 = hc.Snapshot(base, cells, np.array([1.0, 3.0]), np.array([[0.2, 0.5]]), np.array([[0.1, 0.3]]),
+                            pd.DataFrame(), pd.DataFrame())
+        self.assertEqual(snap1.kappa, 1.0)       # 舊快照沒有 probability 欄＝卜瓦松
+        snap2 = hc.Snapshot({**base, "probability": {"kappa": 1.8}}, cells, snap1.horizons, snap1.n_ref,
+                            snap1.n_bg, pd.DataFrame(), pd.DataFrame())
+        w = np.array([1.0])
+        p = hc.region_probability(snap2, w, 4.0, 3.0)
+        self.assertLess(p, hc.region_probability(snap1, w, 4.0, 3.0))
+        self.assertAlmostEqual(hc.magnitude_at_probability(snap2, w, 3.0, p), 4.0, places=6)

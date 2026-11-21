@@ -169,6 +169,9 @@ def model_info(snap):
     p = snap.params
     core = {"params": p["params"], "calibration_factors": p["calibration_factors"],
             "uniform_rate_per_cell_day": p["fit_info"]["uniform_rate_per_cell_day"]}
+    if "probability" in p:
+        # 群聚係數 kappa 也進雜湊：換算方式改了就是不同的預報，計分要分開（沒有這欄的舊快照雜湊不變）
+        core["probability"] = p["probability"]
     prm = p["params"]
     return {"version": p.get("model_version", "unknown"), "git_sha": git_sha(),
             "params_hash": hashlib.sha256(canonical(core).encode("utf-8")).hexdigest(),
@@ -212,7 +215,8 @@ def build_batch(snap, uniform, regions=STANDARD_REGIONS, mags=STANDARD_MAGS, win
                 nb = hc.region_expected(snap, w, m, T, "bg")
                 nu = float(w.sum()) * float(hz.scale_magnitude(uniform[T], m, snap.m_ref, snap.b))
                 card = {"id": card_id(issued_at, set_name, rg["id"], m, T), "r": rg["id"], "m": m, "T": T,
-                        "p": sig(hc.probability(n)), "pb": sig(hc.probability(nb)), "pu": sig(hc.probability(nu)),
+                        "p": sig(hc.probability(n, snap.kappa)), "pb": sig(hc.probability(nb, snap.kappa)),
+                        "pu": sig(hc.probability(nu, snap.kappa)),
                         "n": sig(n), "nb": sig(nb), "nu": sig(nu)}
                 if m >= EXTRAPOLATED_MAG:
                     card["x"] = 1

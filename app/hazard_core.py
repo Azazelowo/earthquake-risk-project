@@ -62,6 +62,11 @@ class Snapshot:
         return float(self.params["params"]["b"])
 
     @property
+    def kappa(self):
+        """機率換算的群聚係數（params.json 的 probability.kappa；舊快照沒有這欄＝1）"""
+        return float((self.params.get("probability") or {}).get("kappa", 1.0))
+
+    @property
     def issue_time(self):
         return pd.Timestamp(self.params["issue_time"])
 
@@ -157,8 +162,11 @@ def scale_magnitude(n_ref, m, m_ref, b):
     return np.asarray(n_ref) * 10.0 ** (-b * (m - m_ref))
 
 
-def probability(n):
-    return -np.expm1(-np.asarray(n, float))
+def probability(n, kappa=1.0):
+    """期望數 → 至少發生一次的機率。kappa＞1：地震成群發生（複合卜瓦松，每群平均 kappa 個），
+    P = 1 − exp(−n / kappa)；kappa = 1 就是一般的卜瓦松。kappa 由 app/probability_calibration.py
+    用訓練期真的發生的地震估（docs/reports/probability_calibration.md）。"""
+    return -np.expm1(-np.asarray(n, float) / float(kappa))
 
 
 def expected(snap, m, T, which="full"):
@@ -247,7 +255,7 @@ def region_expected(snap, weights, m, T, which="full"):
 
 
 def region_probability(snap, weights, m, T, which="full"):
-    return float(probability(region_expected(snap, weights, m, T, which)))
+    return float(probability(region_expected(snap, weights, m, T, which), snap.kappa))
 
 
 def curve_vs_magnitude(snap, weights, T, mags):
@@ -256,8 +264,8 @@ def curve_vs_magnitude(snap, weights, T, mags):
     n_bg = (weights * interp_horizon(snap.n_bg, snap.horizons, T)).sum()
     mags = np.asarray(mags, float)
     return pd.DataFrame({"m": mags,
-                         "p_full": probability(scale_magnitude(n_full, mags, snap.m_ref, snap.b)),
-                         "p_bg": probability(scale_magnitude(n_bg, mags, snap.m_ref, snap.b))})
+                         "p_full": probability(scale_magnitude(n_full, mags, snap.m_ref, snap.b), snap.kappa),
+                         "p_bg": probability(scale_magnitude(n_bg, mags, snap.m_ref, snap.b), snap.kappa)})
 
 
 def curve_vs_horizon(snap, weights, m, horizons_days):
@@ -271,7 +279,7 @@ def magnitude_at_probability(snap, weights, T, p_target, which="full"):
     """反查：在這個地點、這段時間內，機率達 p_target 的最大規模門檻（GR 可解析反解）。"""
     mat = snap.n_ref if which == "full" else snap.n_bg
     n_ref = float((weights * interp_horizon(mat, snap.horizons, T)).sum())
-    n_target = -np.log1p(-p_target)
+    n_target = -np.log1p(-p_target) * snap.kappa
     if n_ref <= 0:
         return float("nan")
     return snap.m_ref + np.log10(n_ref / n_target) / snap.b

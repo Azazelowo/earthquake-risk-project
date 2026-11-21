@@ -3,7 +3,7 @@
 兩件事，刻意分開：
     裁決 resolve：到期的卡，對照目錄，記下「發生了幾個、有沒有」。結果寫進另一本只能新增的紀錄
         （同樣的雜湊鏈），**不改登記簿**；同一張卡同一階段只裁決一次。
-    計分 score：把裁決過的卡整批拿來算校準、資訊增益、Brier、N 檢定，並判定模型狀態。
+    計分 score：把裁決過的卡整批拿來算校準、資訊增益、Brier、命中數檢定（hit_test），並判定模型狀態。
 
 為什麼單張卡不評對錯（規格 §6.3）：p = 3% 的卡，發生也不代表準、沒發生也不代表錯。
 所以這裡只做整批統計；而且為了不讓重疊的時間窗與餘震成群灌水顯著性，
@@ -178,6 +178,27 @@ def non_overlapping(df):
     return df.loc[keep]
 
 
+def hit_test(y, p, alpha=NTEST_ALPHA):
+    """命中數檢定：發生（y＝1）的卡片數，對「各卡機率 p 不同」的白努利和（Poisson-binomial，精確分佈）做雙尾檢定。
+
+    為什麼不用事件數對卜瓦松（n_test）：地震成群發生，事件數的變異比卜瓦松大。模擬（複合卜瓦松，κ＝1.765，
+    模型完全正確、近 90 天約 13 個不重疊的 7 天窗，2,000 次）：事件數卜瓦松檢定誤判 20%（名目 5%），
+    命中數檢定誤判 2.8%。卡片的機率本來就是 P(至少一次)＝1−exp(−n/κ)，和「有沒有發生」同一個量，
+    所以對命中數檢定與卡片的定義一致，而且不必假設每群有多大。代價：樣本是「窗數」不是「事件數」，檢定力較弱。
+    """
+    p = np.clip(np.asarray(p, float), 0.0, 1.0)
+    y = np.asarray(y, int)
+    if not len(p):
+        return {"kind": "hits", "expected": 0.0, "observed": 0, "p_low": None, "p_high": None, "exceed": None}
+    pmf = np.array([1.0])
+    for q in p:
+        pmf = np.convolve(pmf, [1.0 - q, q])
+    obs = int(y.sum())
+    p_low, p_high = float(pmf[: obs + 1].sum()), float(pmf[obs:].sum())
+    return {"kind": "hits", "expected": float(p.sum()), "observed": obs, "p_low": p_low, "p_high": p_high,
+            "exceed": bool(p_low < alpha or p_high < alpha)}
+
+
 def n_test(observed, expected, alpha=NTEST_ALPHA):
     """觀測事件數對 Poisson(期望) 的雙尾檢定。exceed＝落在 2.5%／97.5% 之外。"""
     if not expected or expected <= 0:
@@ -225,9 +246,12 @@ def evaluate_group(df, as_of):
     res = {"as_of": fc.iso(as_of), "n_cards": int(len(d)), "n_events": n_events,
            "maybe_missing_cards": int(d["maybe_missing"].sum()) if len(d) else 0}
     if not len(d):
-        return {**res, "n_test": n_test(0, 0.0), "gain_vs_bg": None, "gain_vs_uniform": None,
+        return {**res, "n_test": hit_test([], []), "gain_vs_bg": None, "gain_vs_uniform": None,
                 "brier": None, "brier_skill_vs_bg": None, "brier_skill_vs_uniform": None, "reliability": []}
-    res["n_test"] = n_test(n_events, float(d["n"].sum()))
+    # 檢定用「命中數」（hit_test），不用事件數的卜瓦松檢定：後者在地震成群時會誤判（見 hit_test）。
+    # 事件數與期望事件數仍然記下來，只供描述。
+    res["n_test"] = hit_test(d["y"], d["p"])
+    res["events_expected"] = float(d["n"].sum())
     res["gain_vs_bg"] = information_gain(d["n_events"], d["n"], d["nb"])
     res["gain_vs_uniform"] = information_gain(d["n_events"], d["n"], d["nu"])
     bs = brier(d["p"], d["y"])

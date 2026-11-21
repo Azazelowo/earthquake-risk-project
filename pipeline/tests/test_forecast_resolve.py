@@ -175,6 +175,36 @@ class ScoringPrimitivesTest(unittest.TestCase):
         self.assertTrue(fr.n_test(0, 10.0)["exceed"])
         self.assertIsNone(fr.n_test(0, 0.0)["exceed"])
 
+    def test_hit_test_is_the_exact_poisson_binomial(self):
+        r = fr.hit_test([0, 0], [0.5, 0.5])                             # 分佈 [0.25, 0.5, 0.25]
+        self.assertAlmostEqual(r["p_low"], 0.25)
+        self.assertAlmostEqual(r["p_high"], 1.0)
+        self.assertAlmostEqual(r["expected"], 1.0)
+        self.assertFalse(r["exceed"])
+        many = fr.hit_test([1] * 12 + [0] * 18, [0.1] * 30)             # 期望 3 次卻發生 12 次
+        self.assertTrue(many["exceed"] and many["p_high"] < 0.001)
+        none = fr.hit_test([0] * 30, [0.5] * 30)                        # 期望 15 次卻一次都沒有
+        self.assertTrue(none["exceed"])
+        self.assertEqual(fr.hit_test([], [])["exceed"], None)
+        self.assertEqual(fr.hit_test([1], [1.0])["p_low"], 1.0)         # 機率 1 的卡不會讓檢定壞掉
+
+    def test_hit_test_does_not_false_alarm_under_clustering_but_the_event_count_test_does(self):
+        """複合卜瓦松（群數～Poisson(n/κ)、每群大小～幾何分布、平均 κ），模型完全正確：
+        事件數對卜瓦松的檢定會大量誤判，命中數檢定不會。這是 evaluate_group 改用命中數的理由。"""
+        rng = np.random.default_rng(0)
+        kappa, trials, windows = 1.765, 400, 13
+        fp_events = fp_hits = 0
+        for _ in range(trials):
+            n = rng.lognormal(0.0, 0.7, windows)
+            clusters = rng.poisson(n / kappa)
+            events = np.array([rng.geometric(1 / kappa, size=c).sum() if c else 0 for c in clusters])
+            y = (events > 0).astype(int)
+            p = -np.expm1(-n / kappa)
+            fp_events += bool(fr.n_test(int(events.sum()), float(n.sum()))["exceed"])
+            fp_hits += bool(fr.hit_test(y, p)["exceed"])
+        self.assertGreater(fp_events / trials, 0.12)                    # 名目 5%，實際約 20%
+        self.assertLess(fp_hits / trials, 0.07)
+
     def test_information_gain(self):
         obs = np.array([3.0, 0.0, 1.0, 0.0])
         flat = np.full(4, 1.0)

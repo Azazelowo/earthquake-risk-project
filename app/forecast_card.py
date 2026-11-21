@@ -70,6 +70,8 @@ RESOLUTION = {
 
 
 NOTES = {
+    "p": "機率 p＝1−exp(−n/κ)：n 是期望地震數，κ 是群聚係數（複合卜瓦松，地震以「群」為單位發生，每群平均 κ 個；κ＝1 就是一般卜瓦松）。"
+         "p、平常值、均勻值用同一個 κ。κ 與推導見 app/probability_calibration.py。n、nb、nu 是期望「地震數」，不是機率。",
     "pb": "平常值＝只有背景的模型（長期空間分布），總量用它自己的滾動校準，約等於近 730 天同長度窗的平均水準。",
     "pu": "均勻值＝每格相同，總量用同一套滾動校準；是最低標準的對照，不是預報。",
     "ratio": "倍數 n÷nb＝模型相對『平常』。小於 1 代表現在比近兩年平均安靜，不是『比較安全』。"
@@ -176,7 +178,10 @@ def model_info(snap):
     return {"version": p.get("model_version", "unknown"), "git_sha": git_sha(),
             "params_hash": hashlib.sha256(canonical(core).encode("utf-8")).hexdigest(),
             "b": sig(prm["b"]), "m_ref": prm["m_ref"], "mu": sig(prm["mu"]), "K": sig(prm["K"]),
-            "alpha": prm["alpha"], "p": prm["p"]}
+            "alpha": prm["alpha"], "p": prm["p"],
+            # 機率換算：P(至少一次) = 1 − exp(−n / kappa)（複合卜瓦松，地震成群）；kappa＝1 就是一般的卜瓦松
+            "kappa": sig(snap.kappa, 4),
+            "probability_method": (p.get("probability") or {}).get("method", "poisson")}
 
 
 def card_id(issued_at, set_name, region_id, m, T):

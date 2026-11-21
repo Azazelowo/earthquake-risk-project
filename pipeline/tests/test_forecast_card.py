@@ -77,6 +77,14 @@ class BuildTest(unittest.TestCase):
             self.assertEqual(bool(c.get("x")), c["m"] >= 6.5, c["id"])
             self.assertEqual(bool(c.get("i")), c["T"] in (5, 10, 20), c["id"])
 
+    def test_header_states_the_probability_conversion_and_kappa(self):
+        """機率換算（κ）要明寫在標頭：之後的人不必去猜卡片用的是卜瓦松還是複合卜瓦松。"""
+        h = self.header
+        self.assertEqual(h["model"]["kappa"], round(self.snap.kappa, 4))
+        self.assertIn("probability_method", h["model"])
+        self.assertIn("1−exp(−n/κ)", h["notes"]["p"])
+        self.assertIn("不是機率", h["notes"]["p"])
+
     def test_header_records_model_data_and_resolution(self):
         h = self.header
         self.assertEqual(h["model"]["version"], self.snap.params["model_version"])

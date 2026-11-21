@@ -16,6 +16,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hazard_core as hc  # noqa: E402
+import what_if as wi  # noqa: E402
 
 APP_DIR = Path(__file__).resolve().parent
 BASE_DATA = Path(os.environ.get("HAZARD_APP_DATA", APP_DIR / "data"))
@@ -158,8 +159,9 @@ else:
 for note in rel["notes"]:
     st.warning(note)
 
-tab_map, tab_m, tab_t, tab_rel = st.tabs(
-    ["🗺️ 規模＋時間 → 看地點", "📈 地點＋時間 → 看規模", "⏱️ 地點＋規模 → 看時間", "🔍 可信度與限制"])
+tab_map, tab_m, tab_t, tab_rel, tab_wi = st.tabs(
+    ["🗺️ 規模＋時間 → 看地點", "📈 地點＋時間 → 看規模", "⏱️ 地點＋規模 → 看時間", "🔍 可信度與限制",
+     "🕰️ 歷史類比"])
 
 # ---------------- 地圖 ----------------
 with tab_map:
@@ -288,3 +290,59 @@ with tab_rel:
 """)
     st.caption(f"參數：b＝{snap.b:.3f}、M_ref＝{snap.m_ref:g}；訓練期 {snap.params['train'][0]}～{snap.params['train'][1]}、"
                f"測試期 {snap.params['test'][0]}～{snap.params['test'][1]}。")
+
+
+# ---------------- 歷史類比（如果真的發生會怎樣：第一階段） ----------------
+@st.cache_data
+def get_catalog(data_dir, full_path):
+    return wi.load_catalog(data_dir, full_path)
+
+
+with tab_wi:
+    st.subheader("歷史上，類似規模的地震在這附近發生過什麼？")
+    st.caption("這是歷史紀錄的對照，**不是預報也不是預警**：不代表同樣的事會（或不會）再發生，"
+               "也**不推估這個地點的震度**（本專案沒有經過驗證的地動衰減式）。")
+    if not mode.startswith("點"):
+        st.info("請在左側把「篩選方式」改成「點震源（圓形範圍）」，再回到這一頁。")
+    else:
+        full_path = os.environ.get("HAZARD_FULL_EVENTS")
+        cat, cat_note = get_catalog(str(BASE_DATA), full_path)
+        c1, c2 = st.columns(2)
+        tol = c1.slider("規模容許差（±）", 0.1, 1.0, wi.TOL_DEFAULT, 0.1,
+                        help="類比事件的規模落在「左側規模門檻 ± 這個值」之內。")
+        margin = c2.slider("半徑外再放寬（km）", 0, 100, int(wi.NEAR_MARGIN_DEFAULT_KM), 10,
+                           help="半徑外、但在這個距離內的事件標為「附近」，另外計數。")
+        res = wi.find_analogs(cat, lat, lon, radius, m, tol=tol, near_margin_km=margin)
+        yrs = res.span[0] is not None and wi.years_covered(res)
+        st.markdown(f"**條件**：{region_desc}，規模 M{m - tol:.1f}–M{m + tol:.1f}｜"
+                    f"**結果**：區域內 **{res.n_in}** 次、附近 **{res.n_near}** 次"
+                    + (f"（目錄約 {yrs:.0f} 年：{res.span[0]:%Y}–{res.span[1]:%Y}）" if yrs else ""))
+        st.caption(f"母體：{cat_note}。時間以台灣時間顯示。"
+                   + ("" if res.has_depth else "此母體沒有深度資料，故不顯示深度；要看深度請設環境變數 HAZARD_FULL_EVENTS 指向完整目錄。"))
+        if len(res.analogs) == 0:
+            st.warning("目錄裡沒有符合條件的事件。這只表示「這份目錄在這個範圍沒有紀錄」，"
+                       "不能解讀成這裡不會發生；可以放寬規模容許差或距離再看。")
+        else:
+            an = res.analogs.copy()
+            an["radius"] = 1500 * 2.0 ** (an["ml"] - 3)
+            an["tip"] = [f"{hc.to_taipei(t):%Y-%m-%d %H:%M}  M{ml:.1f}  距 {d:.0f} km（{sc}）"
+                         for t, ml, d, sc in zip(an["time"], an["ml"], an["dist_km"], an["scope"])]
+            an["fill"] = [[200, 40, 40, 170] if sc == wi.SCOPE_IN else [230, 150, 0, 150] for sc in an["scope"]]
+            lay = [pdk.Layer("ScatterplotLayer", pd.DataFrame({"lat": [lat], "lon": [lon], "tip": ["所選地點"]}),
+                             get_position=["lon", "lat"], get_radius=radius * 1000, filled=False, stroked=True,
+                             get_line_color=[0, 120, 200, 255], line_width_min_pixels=3),
+                   pdk.Layer("ScatterplotLayer", an, get_position=["lon", "lat"], get_radius="radius",
+                             get_fill_color="fill", stroked=True, get_line_color=[60, 20, 20, 220],
+                             line_width_min_pixels=1, pickable=True)]
+            st.pydeck_chart(pdk.Deck(layers=lay, initial_view_state=pdk.ViewState(latitude=lat, longitude=lon, zoom=7),
+                                     map_provider="carto", map_style="light", tooltip={"text": "{tip}"}),
+                            use_container_width=True, height=460)
+            st.caption("紅點：區域內；橘點：附近；藍圈：所選範圍。圓點大小隨規模增加。")
+            st.dataframe(wi.display_table(an, res.has_depth), use_container_width=True, hide_index=True)
+        st.markdown(f"#### 對照：全目錄中 M{m:.1f} 以上最大的 {len(res.largest)} 筆（不限地點）")
+        if len(res.largest):
+            st.dataframe(wi.display_table(res.largest, res.has_depth), use_container_width=True, hide_index=True)
+        else:
+            st.write("目錄裡沒有這個規模以上的事件。")
+        st.caption("限制：目錄是儀器紀錄（約 1990 年起），早期與外海事件的規模、位置誤差較大；"
+                   "次數少時請勿當作發生頻率。各地震度資料尚未納入。")

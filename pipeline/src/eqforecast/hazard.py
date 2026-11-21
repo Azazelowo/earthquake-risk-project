@@ -34,6 +34,15 @@ ALPHAS = (0.0, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.5)
 PS = (0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.4)
 SIGMAS_ST = (0.25, 0.5, 1.0)
 SIGMAS_BG = (0.25, 0.5, 1.0, 2.0)
+# v1.2：近期加成的平滑寬度隨規模放大（d_frac × 破裂長度）。0 = v1.1 的固定寬度，放在範圍內才能公平比較。
+D_FRACS = (0.0, 0.5, 1.0, 2.0)
+# v1.2：比 deep_km 深的地震不套用規模加權（alpha）。深源大地震幾乎沒有餘震（測試期 7 個深度 > 40 km 的 M6，
+# 1 天內餘震中位數 0；淺層 32 個中位數 13.5），一律套用時擬合會把 alpha 壓到 0，淺層大地震後嚴重低估。
+DEEP_KMS = (0.0, 40.0)
+# 規模分箱（平滑一次一箱，避免每個地震各做一次高斯平滑）：箱內用代表規模算寬度
+KERNEL_EDGES = (4.5, 5.0, 5.5, 6.0, 6.5, 7.0)
+KERNEL_REPS = (4.25, 4.75, 5.25, 5.75, 6.25, 6.75, 7.25)
+KM_PER_DEG = 111.195
 
 EVENT_QUALITIES = ("located", "all")
 
@@ -53,6 +62,8 @@ def load_events(path, quality="located"):
         raise ValueError(f"quality 必須是 {EVENT_QUALITIES} 之一，收到 {quality!r}")
     cols = ["time", "lat", "lon", "ml"]
     df = pd.read_parquet(path)
+    if "depth" in df.columns:
+        cols = cols + ["depth"]
     missing = [c for c in cols if c not in df.columns]
     if missing:
         raise ValueError(f"{path} 缺少欄位 {missing}")
@@ -107,6 +118,12 @@ class HazardParams:
     p: float = 1.1               # 大森定律的衰減指數
     sigma_bg: float = 1.0        # 背景平滑寬度（格）
     sigma_st: float = 0.5        # 近期加成平滑寬度（格）
+    d_frac: float = 0.0          # 平滑寬度隨規模放大：σ(M)² = sigma_st² + (d_frac·L(M)/格寬)²；0 = 固定寬度（v1.1）
+    deep_km: float = 0.0         # > 0 時，深度超過 deep_km 的地震不套用 alpha（權重 1）；0 = 全部套用（v1.1）
+    young_days: float = 0.0      # > 0 時，規模帶來的額外貢獻隨地震年紀以 exp(−年紀/young_days) 遞減（自己的餘震進目錄後
+                                 # 就不再需要它）；遠超過 young_days 後權重回到 1，和 alpha = 0 相同。0 = alpha 永遠全額（v1.1）
+    boost_amp: float = 1.0       # 額外貢獻的倍率 A：(10^(alpha·ΔM) − 1) × A。alpha 管「大地震比小地震多多少」、A 管整體大小，
+                                 # 和 ETAS 把 K 與 alpha 分開的道理相同（只在 young_days > 0 時有作用）
     floor_frac: float = 0.05     # 背景項混入多少比例的全區平均，避免從沒震過的格子機率為 0
     lookback_days: float = 365.0
 
@@ -124,6 +141,8 @@ class Catalog:
         self.grid = grid
         self.time = ev["time"].to_numpy("datetime64[us]")
         self.ml = ev["ml"].to_numpy(float)
+        # 深度缺值（舊快照、部分即時資料）當成淺層：寧可高估餘震也不要低估
+        self.depth = ev["depth"].to_numpy(float) if "depth" in ev.columns else np.full(len(ev), np.nan)
         self.flat = (ev["_i"].to_numpy() * grid.shape[1] + ev["_j"].to_numpy()).astype(int)
         self.t_start = self.time[0] if len(self.time) else None
 
@@ -173,8 +192,50 @@ def background_rate(cat, t0, sigma_bg, floor_frac):
     return (1 - floor_frac) * rate + floor_frac * rate.mean()
 
 
-def short_term(cat, t0, horizon_days, alpha, c, p, sigma_st, lookback_days, m_ref):
-    """t0 起 horizon_days 內，近期地震依大森定律貢獻的量（未乘 K）。"""
+def rupture_km(ml):
+    """破裂長度的量級 L(M) = 0.01 × 10^(0.5 M) 公里（M5 約 3 km、M7 約 32 km）。
+
+    為什麼需要：大地震的餘震散布範圍和破裂長度同量級，固定 0.1° 的平滑寬度會把 M7 的餘震全擠在震央附近，
+    規模加權（alpha）一大就高估震央、低估外圍，擬合因此把 alpha 壓到 0（hazard_v1 已知限制 3）。
+    這個形式是 Helmstetter, Kagan & Jackson (2006) 短期模型用的距離尺度（係數待對照原文）。
+    """
+    return 0.01 * 10 ** (0.5 * np.asarray(ml, float))
+
+
+def cell_km(grid):
+    """網格一格的代表寬度（公里）：緯向與經向的幾何平均，經向取網格中央緯度。"""
+    lat_mid = np.radians(0.5 * (grid.lat_min + grid.lat_max))
+    return grid.deg * KM_PER_DEG * np.sqrt(np.cos(lat_mid))
+
+
+def kernel_sigma(ml, sigma_st, d_frac, km_per_cell):
+    """規模 ml 的近期加成平滑寬度（格）。"""
+    return np.sqrt(sigma_st ** 2 + (d_frac * rupture_km(ml) / km_per_cell) ** 2)
+
+
+_GL_X, _GL_W = np.polynomial.legendre.leggauss(48)
+
+
+def decayed_omori_integral(age_days, horizon_days, c, p, tau):
+    """∫ exp(−s/tau) (s + c)^(−p) ds，s 從 age 到 age + horizon（在 log(s + c) 上做高斯–勒讓德積分）。"""
+    lo = np.log(np.asarray(age_days, float) + c)
+    hi = np.log(np.asarray(age_days, float) + horizon_days + c)
+    u = 0.5 * (hi - lo)[:, None] * _GL_X[None, :] + 0.5 * (hi + lo)[:, None]
+    x = np.exp(u)                                   # s + c
+    f = np.exp(-(x - c) / tau) * x ** (1.0 - p)     # 換元：ds = (s + c) du
+    return 0.5 * (hi - lo) * (f @ _GL_W)
+
+
+def short_term(cat, t0, horizon_days, alpha, c, p, sigma_st, lookback_days, m_ref, d_frac=0.0, deep_km=0.0,
+               young_days=0.0, boost_amp=1.0):
+    """t0 起 horizon_days 內，近期地震依大森定律貢獻的量（未乘 K）。
+
+    d_frac > 0 時依規模分箱，各箱用自己的平滑寬度（kernel_sigma）。
+    deep_km > 0 時，深度 > deep_km 的地震不套用 alpha。
+    young_days > 0 時，規模帶來的額外貢獻 (10^(alpha·ΔM) − 1) 在預報窗內隨時間 exp(−s/young_days) 遞減：
+    剛發生的大地震還沒有自己的餘震可以「代表」它，只能靠規模；等餘震進了目錄，餘震本身就帶了這個資訊，
+    再全額加權會重複計算（7 天窗的擬合因此選 alpha = 0）。遞減是算在預報窗「裡面」的，
+    所以主震後 1 小時發布、看 7 天時，第 2 天以後不會再被全額加權。"""
     t0 = np.datetime64(t0, "us")
     a = cat.before(t0 - np.timedelta64(int(lookback_days * 86400), "s"))
     b = cat.before(t0)
@@ -182,14 +243,35 @@ def short_term(cat, t0, horizon_days, alpha, c, p, sigma_st, lookback_days, m_re
     if b <= a:
         return np.zeros(cat.grid.shape)
     age = (t0 - cat.time[a:b]) / DAY
-    w = 10 ** (alpha * (cat.ml[a:b] - m_ref)) * omori_integral(age, horizon_days, c, p)
-    return _smooth(np.bincount(cat.flat[a:b], weights=w, minlength=n).reshape(cat.grid.shape), sigma_st)
+    ml = cat.ml[a:b]
+    a_eff = np.full(b - a, float(alpha))
+    if deep_km > 0:
+        a_eff[cat.depth[a:b] > deep_km] = 0.0   # NaN > x 為 False → 當成淺層
+    boost = 10 ** (a_eff * (ml - m_ref))
+    if young_days > 0:
+        w = omori_integral(age, horizon_days, c, p)
+        extra = (boost - 1.0) > 1e-12
+        if extra.any():
+            w[extra] += boost_amp * (boost[extra] - 1.0) * decayed_omori_integral(age[extra], horizon_days, c, p, young_days)
+    else:
+        w = boost * omori_integral(age, horizon_days, c, p)
+    if d_frac <= 0:
+        return _smooth(np.bincount(cat.flat[a:b], weights=w, minlength=n).reshape(cat.grid.shape), sigma_st)
+    km = cell_km(cat.grid)
+    box = np.digitize(ml, KERNEL_EDGES)
+    out = np.zeros(cat.grid.shape)
+    for k in np.unique(box):
+        sel = box == k
+        field = np.bincount(cat.flat[a:b][sel], weights=w[sel], minlength=n).reshape(cat.grid.shape)
+        out += _smooth(field, float(kernel_sigma(KERNEL_REPS[k], sigma_st, d_frac, km)))
+    return out
 
 
 def expected_ref(cat, t0, horizon_days, prm):
     """N(格, T, ≥m_ref)：背景項與近期項分開回傳 (mu × bg × T, K × st)。"""
     bg = background_rate(cat, t0, prm.sigma_bg, prm.floor_frac) * horizon_days
-    st = short_term(cat, t0, horizon_days, prm.alpha, prm.c, prm.p, prm.sigma_st, prm.lookback_days, prm.m_ref)
+    st = short_term(cat, t0, horizon_days, prm.alpha, prm.c, prm.p, prm.sigma_st, prm.lookback_days, prm.m_ref,
+                    prm.d_frac, prm.deep_km, prm.young_days, prm.boost_amp)
     return prm.mu * bg, prm.K * st
 
 
@@ -341,7 +423,8 @@ def boundary_hits(best, grids):
 
 
 def fit(events, grid, train_start, train_end, m_ref=3.5, horizon_days=7.0,
-        alphas=ALPHAS, ps=PS, sigmas_st=SIGMAS_ST, sigmas_bg=SIGMAS_BG, base=None):
+        alphas=ALPHAS, ps=PS, sigmas_st=SIGMAS_ST, sigmas_bg=SIGMAS_BG, d_fracs=(0.0,), deep_kms=(0.0,),
+        base=None):
     """用 [train_start, train_end) 的資料估參數。回傳 (HazardParams, 搜尋紀錄 DataFrame, 摘要 dict)。
 
     b 值只用 train_end 之前的地震；每個訓練窗的背景與近期項只用該窗發布時間之前的地震。
@@ -357,21 +440,24 @@ def fit(events, grid, train_start, train_end, m_ref=3.5, horizon_days=7.0,
     obs = np.stack([cat.counts(t, t + h) for t in t0s])
     bgs = {s: np.stack([background_rate(cat, t, s, base.floor_frac) * horizon_days for t in t0s]) for s in sigmas_bg}
     rows, best = [], None
-    for alpha in alphas:
-        for p in ps:
-            for s_st in sigmas_st:
-                st = np.stack([short_term(cat, t, horizon_days, alpha, base.c, p, s_st, base.lookback_days, m_ref)
-                               for t in t0s])
-                for s_bg in sigmas_bg:
-                    mu, k, ll = fit_mu_k(obs, bgs[s_bg], st)
-                    rows.append({"alpha": alpha, "p": p, "sigma_st": s_st, "sigma_bg": s_bg, "mu": mu, "K": k, "ll": ll})
-                    if best is None or ll > best["ll"]:
-                        best = rows[-1]
+    for dk, d in [(dk, d) for dk in deep_kms for d in d_fracs]:
+        for alpha in alphas:
+            for p in ps:
+                for s_st in sigmas_st:
+                    st = np.stack([short_term(cat, t, horizon_days, alpha, base.c, p, s_st, base.lookback_days, m_ref,
+                                              d, dk) for t in t0s])
+                    for s_bg in sigmas_bg:
+                        mu, k, ll = fit_mu_k(obs, bgs[s_bg], st)
+                        rows.append({"deep_km": dk, "d_frac": d, "alpha": alpha, "p": p, "sigma_st": s_st, "sigma_bg": s_bg,
+                                     "mu": mu, "K": k, "ll": ll})
+                        if best is None or ll > best["ll"]:
+                            best = rows[-1]
     prm = HazardParams(m_ref=m_ref, b=b, mu=best["mu"], K=best["K"], alpha=best["alpha"], c=base.c, p=best["p"],
-                       sigma_bg=best["sigma_bg"], sigma_st=best["sigma_st"], floor_frac=base.floor_frac,
+                       sigma_bg=best["sigma_bg"], sigma_st=best["sigma_st"], d_frac=best["d_frac"], deep_km=best["deep_km"],
+                       floor_frac=base.floor_frac,
                        lookback_days=base.lookback_days)
     mu_bg, _, ll_bg = fit_mu_k(obs, bgs[prm.sigma_bg], np.zeros_like(obs), with_short_term=False)
-    grids = {"alpha": alphas, "p": ps, "sigma_st": sigmas_st, "sigma_bg": sigmas_bg}
+    grids = {"deep_km": deep_kms, "d_frac": d_fracs, "alpha": alphas, "p": ps, "sigma_st": sigmas_st, "sigma_bg": sigmas_bg}
     info = {"n_windows": int(len(t0s)), "n_events": int(obs.sum()), "ll_full": best["ll"], "ll_bg_only": ll_bg,
             "mu_bg_only": mu_bg, "uniform_rate_per_cell_day": float(obs.sum() / obs.size / horizon_days),
             "search_grid": {k: [float(v) for v in vals] for k, vals in grids.items()},

@@ -106,7 +106,62 @@ def summarize(df, edges=EDGES):
             "per_county_high": per_county.to_dict(), "quantiles": q, "n_days": int(df["issue_time"].nunique())}
 
 
-def write_report(df, s, path_md, start, end):
+N_BOOT = 2000
+
+
+def outcomes(df, events, radius_km=RADIUS_KM, days=T_DAYS, m=M):
+    """每個（發布時間、縣市）之後 days 天內，代表點 radius_km 內有沒有真的發生 ≥ m 的地震（布林陣列）。
+
+    事件用和模型相同的母體（catalog_base：定位良好的事件），所以檢查的是模型自己要預報的東西。
+    """
+    ev = events[events["ml"] >= m]
+    t = ev["time"].to_numpy("datetime64[s]")
+    lat, lon = ev["lat"].to_numpy(float), ev["lon"].to_numpy(float)
+    span = np.timedelta64(int(round(days * 86400)), "s")
+    hit = np.zeros(len(df), bool)
+    for name, clat, clon in COUNTIES:
+        tt = np.sort(t[hc.haversine_km(clat, clon, lat, lon) <= radius_km])
+        rows = (df["county"] == name).to_numpy()
+        t0 = pd.to_datetime(df.loc[rows, "issue_time"]).to_numpy("datetime64[s]")
+        hit[rows] = np.searchsorted(tt, t0 + span, side="left") > np.searchsorted(tt, t0, side="left")
+    return hit
+
+
+def calibration(df, hit, edges=EDGES, n_boot=N_BOOT, seed=0):
+    """依狀態分組：真的發生的比例 ÷「平常」的平均機率＝實際倍數。區間：以月為單位整塊重抽樣（地震會群聚）。
+
+    這是「拿真的發生的地震檢查門檻」：如果「比平常高不少」（3–10 倍）的日子，真的發生的比例也是平常的 3–10 倍，
+    門檻說的就是實話；如果遠低於 3 倍，標籤就誇大了。
+    """
+    lv = df["ratio"].map(lambda r: level_of(r, edges)).to_numpy()
+    month = pd.to_datetime(df["issue_time"]).dt.to_period("M").to_numpy()
+    months = np.unique(month)
+    idx = {mo: np.flatnonzero(month == mo) for mo in months}
+    p, pb = df["p"].to_numpy(float), df["p_bg"].to_numpy(float)
+    rng = np.random.default_rng(seed)
+    draws = [np.concatenate([idx[mo] for mo in rng.choice(months, len(months))]) for _ in range(n_boot)]
+    rows = []
+    for k in range(len(edges) + 1):
+        sel = lv == k
+        n = int(sel.sum())
+        if n == 0:
+            rows.append({"level": k, "n": 0})
+            continue
+        obs, mp, mb = float(hit[sel].mean()), float(p[sel].mean()), float(pb[sel].mean())
+        boots = []
+        for d in draws:
+            s_ = d[lv[d] == k]
+            if len(s_):
+                boots.append(hit[s_].mean() / pb[s_].mean())
+        lo, hi = (np.quantile(boots, [0.025, 0.975]) if len(boots) > 10 else (np.nan, np.nan))
+        rows.append({"level": k, "n": n, "hits": int(hit[sel].sum()), "obs": obs, "mean_p": mp, "mean_p_bg": mb,
+                     "predicted_ratio": mp / mb, "realized_ratio": obs / mb, "lo": float(lo), "hi": float(hi),
+                     "obs_over_p": obs / mp if mp > 0 else np.nan})
+    overall = {"obs": float(hit.mean()), "mean_p": float(p.mean()), "mean_p_bg": float(pb.mean())}
+    return rows, overall
+
+
+def write_report(df, s, path_md, start, end, calib=None):
     pct = lambda x: f"{x * 100:.2f}%"  # noqa: E731
     lines = [
         "# 狀態門檻的回測統計",
@@ -129,6 +184,22 @@ def write_report(df, s, path_md, start, end):
     lines += [f"| {k * 100:g}% | {v:.2f} |" for k, v in s["quantiles"].items()]
     lines += ["", "## 各縣市「比平常高不少」以上的天數比例", "", "| 縣市 | 比例 |", "|---|---|"]
     lines += [f"| {k} | {pct(v)} |" for k, v in s["per_county_high"].items()]
+    if calib:
+        rows, overall = calib
+        lines += ["", "## 拿真的發生的地震檢查門檻（實際倍數）", "",
+                  f"每個縣市×天，之後 {T_DAYS:g} 天內代表點 {RADIUS_KM:g} km 內有沒有真的發生 M{M:g} 以上的地震"
+                  "（和模型同一個事件母體）。**實際倍數**＝真的發生的比例 ÷ 該組「平常」的平均機率；"
+                  "方括號是以月為單位整塊重抽樣 2000 次的 95% 區間（地震會群聚，逐日重抽樣會低估不確定性）。", "",
+                  "| 狀態 | 縣市×天 | 真的發生 | 發生比例 | 模型機率（平均） | 平常機率（平均） | 模型倍數 | **實際倍數** [95%] | 實際÷模型 |",
+                  "|---|---|---|---|---|---|---|---|---|"]
+        for r in rows:
+            if not r["n"]:
+                lines.append(f"| {LEVELS[r['level']]} | 0 | — | — | — | — | — | — | — |")
+                continue
+            lines.append(f"| {LEVELS[r['level']]} | {r['n']:,} | {r['hits']:,} | {pct(r['obs'])} | {pct(r['mean_p'])} | "
+                         f"{pct(r['mean_p_bg'])} | {r['predicted_ratio']:.2f} | **{r['realized_ratio']:.2f}** "
+                         f"[{r['lo']:.2f}–{r['hi']:.2f}] | {r['obs_over_p']:.2f} |")
+        lines += ["", f"全部：真的發生 {pct(overall['obs'])}、模型平均 {pct(overall['mean_p'])}、平常平均 {pct(overall['mean_p_bg'])}。", ""]
     lines += ["", "## 怎麼看", "",
               "- 倍數小於 1 是正常的：「平常」是包含過去大地震餘震期的長期平均，平靜時「現在」比它低（APP 畫面寫「約 1 倍」）。",
               "- 設計書的目標是「比平常高不少」以上不要天天出現；上表的「所有縣市×天」就是一般使用者打開 APP 時看到各狀態的機會。",
@@ -143,14 +214,20 @@ def main():
     ap.add_argument("--end", default=params["test"][1])
     ap.add_argument("--out", default=str(REPORT_DIR))
     ap.add_argument("--csv", action="store_true", help="另存每天每縣市的倍數（state_frequency.csv）")
+    ap.add_argument("--from-csv", default=None, help="讀之前存的 state_frequency.csv，不重算倍數（只重做統計與實際倍數）")
     args = ap.parse_args()
-    df = ratios(args.start, args.end)
+    if args.from_csv:
+        df = pd.read_csv(args.from_csv, parse_dates=["issue_time"])
+    else:
+        df = ratios(args.start, args.end)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     if args.csv:
         df.to_csv(out / "state_frequency.csv", index=False, float_format="%.6g", date_format="%Y-%m-%d %H:%M")
     s = summarize(df)
-    write_report(df, s, out / "state_frequency.md", args.start, args.end)
+    calib = calibration(df, outcomes(df, lu.read_base_catalog(BASE_DIR)))
+    s["calibration"] = calib[0]
+    write_report(df, s, out / "state_frequency.md", args.start, args.end, calib)
     print(json.dumps(s, ensure_ascii=False, indent=1, default=float))
 
 

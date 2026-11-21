@@ -163,8 +163,8 @@ tab_map, tab_m, tab_t, tab_rel = st.tabs(
 
 # ---------------- 地圖 ----------------
 with tab_map:
-    p_cell = hc.probability(hc.expected(snap, m, T, "full"))
-    p_cell_bg = hc.probability(hc.expected(snap, m, T, "bg"))
+    p_cell = hc.probability(hc.expected(snap, m, T, "full"), snap.kappa)
+    p_cell_bg = hc.probability(hc.expected(snap, m, T, "bg"), snap.kappa)
     p_max = max(float(np.quantile(p_cell, 0.995)), 1e-4)
     p_min = p_max / 1000
     colors = hc.color_scale(p_cell, p_min, p_max)

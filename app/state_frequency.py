@@ -73,6 +73,7 @@ def ratios(start, end, base_dir=BASE_DIR, hour_utc=0, log=print):
     # background_rescale 回傳 1（它假設 n_bg 已經換好），這裡卻是自己重算的，「平常」因此低估約 2.6 倍。
     bgp = hz.bg_only_params(prm, params["fit_info"]["mu_bg_only"])
     trailing = float(params.get("calibration_trailing_days", 730))
+    kappa = float((params.get("probability") or {}).get("kappa", 1.0))   # 和 APP 相同的群聚換算
     scale = 10.0 ** (-prm.b * (M - prm.m_ref))
     weights = county_weights(params)
     days = pd.date_range(pd.Timestamp(start) + pd.Timedelta(hours=hour_utc), pd.Timestamp(end), freq="D")
@@ -88,8 +89,8 @@ def ratios(start, end, base_dir=BASE_DIR, hour_utc=0, log=print):
         full = (a + b).ravel() * factor
         bg = hz.expected_ref(cat, t0, T_DAYS, bgp)[0].ravel() * factor_bg
         for name, w in weights.items():
-            p = float(-np.expm1(-(w * full).sum() * scale))
-            pb = float(-np.expm1(-(w * bg).sum() * scale))
+            p = float(hc.probability((w * full).sum() * scale, kappa))
+            pb = float(hc.probability((w * bg).sum() * scale, kappa))
             rows.append((t0, name, p, pb, p / pb if pb > 0 else np.nan))
     return pd.DataFrame(rows, columns=["issue_time", "county", "p", "p_bg", "ratio"])
 

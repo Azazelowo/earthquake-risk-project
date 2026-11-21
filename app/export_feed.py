@@ -84,7 +84,7 @@ def build_feed(snap):
         "mock": False,
         "issued_at": _iso(issue),
         "grid": {k: float(g[k]) for k in ("lat_min", "lat_max", "lon_min", "lon_max", "deg")},
-        "params": {"b": round(snap.b, 4), "m_ref": snap.m_ref},
+        "params": {"b": round(snap.b, 4), "m_ref": snap.m_ref, "kappa": round(snap.kappa, 4)},
         "horizons_days": [float(h) for h in snap.horizons],
         "cells": {"lat": [round(float(v), 4) for v in snap.cells["lat_bin"]],
                   "lon": [round(float(v), 4) for v in snap.cells["lon_bin"]]},

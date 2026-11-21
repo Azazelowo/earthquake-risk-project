@@ -822,6 +822,15 @@
   "lon_max": 123.0,
   "deg": 0.2
  },
+ "probability": {
+  "kappa": 1.765,
+  "method": "compound_poisson",
+  "train": [
+   "1995-01-01",
+   "2015-01-01"
+  ],
+  "source": "app/probability_calibration.py"
+ },
  "snapshot": {
   "exported_from": "pipeline/data/hazard",
   "recent_events_days": 365.0,

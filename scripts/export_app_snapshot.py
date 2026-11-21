@@ -35,6 +35,8 @@ def main():
     ap.add_argument("--out", default="app/data")
     ap.add_argument("--event-days", type=float, default=365.0)
     ap.add_argument("--event-min-ml", type=float, default=3.0)
+    ap.add_argument("--kappa", default="pipeline/data/probability_calibration/kappa.json",
+                    help="機率換算的群聚係數（app/probability_calibration.py 的輸出）；檔案不存在就用卜瓦松")
     args = ap.parse_args()
 
     src, out = Path(args.hazard_dir), Path(args.out)
@@ -67,6 +69,12 @@ def main():
     ev = ev[keep].sort_values("time").assign(source="目錄")
     ev.to_csv(out / "recent_events.csv", index=False, float_format="%.4f", date_format="%Y-%m-%d %H:%M:%S")
 
+    # 機率換算的群聚係數（app/probability_calibration.py 用訓練期估）；沒有就維持卜瓦松（kappa = 1）
+    kfile = Path(args.kappa)
+    if kfile.exists():
+        k = json.loads(kfile.read_text(encoding="utf-8"))
+        params["probability"] = {"kappa": round(float(k["kappa"]), 4), "method": "compound_poisson",
+                                 "train": k["train"], "source": "app/probability_calibration.py"}
     params["snapshot"] = {"exported_from": str(src).replace("\\", "/"), "recent_events_days": args.event_days,
                           "recent_events_min_ml": args.event_min_ml, "n_recent_events": int(len(ev)),
                           "n_catalog_base": int(len(base)), "event_quality": quality}

@@ -37,7 +37,9 @@ P_TARGETS = [0.01, 0.1]
 
 def snapshot_from_feed(feed):
     """feed.json → hazard_core.Snapshot（n_bg 已在匯出時換算過，不再乘 background_rescale）。"""
-    params = {"grid": feed["grid"], "params": feed["params"], "issue_time": feed["issued_at"]}
+    params = {"grid": feed["grid"], "params": feed["params"], "issue_time": feed["issued_at"],
+              # 機率換算的群聚係數在 feed.params.kappa；舊 feed 沒有＝1（和 TS validateFeed 相同）
+              "probability": {"kappa": float(feed["params"].get("kappa", 1.0))}}
     cells = pd.DataFrame({"lat_bin": feed["cells"]["lat"], "lon_bin": feed["cells"]["lon"]})
     return hc.Snapshot(params, cells, np.asarray(feed["horizons_days"], float),
                        np.asarray(feed["n_full"], float), np.asarray(feed["n_bg"], float),
@@ -78,8 +80,8 @@ def build(feed):
     whole = {"name": "全網格"}
     whole.update(region_case(snap, hc.all_weights(snap)))
     cells = {"T": 0.37, "m": 5.0,
-             "p_full": hc.probability(hc.expected(snap, 5.0, 0.37, "full")).tolist(),
-             "p_bg": hc.probability(hc.expected(snap, 5.0, 0.37, "bg")).tolist()}
+             "p_full": hc.probability(hc.expected(snap, 5.0, 0.37, "full"), snap.kappa).tolist(),
+             "p_bg": hc.probability(hc.expected(snap, 5.0, 0.37, "bg"), snap.kappa).tolist()}
     return {"generated_by": "破專題 app/export_parity.py", "feed": feed,
             "point_cases": cases, "whole_grid": whole, "cells": cells}
 

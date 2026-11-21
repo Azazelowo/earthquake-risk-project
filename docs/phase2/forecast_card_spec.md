@@ -379,7 +379,7 @@ repo 擁有者**技術上仍可重寫分支歷史**。能做的緩解：
 4. 確認 §13 的發布前檢查清單**全部**通過。
 5. Settings → Secrets and variables → Actions → **Variables** → 新增 `FORECAST_ISSUE_ENABLED` = `true`。**這一步之後，下一次排程就會發出第一批標準卡，無法收回。**
 
-**排程觸發**：GitHub 內建排程在這個倉庫實測不可靠（`hourly-feed.yml` 已改由外部服務每 15 分鐘呼叫 `workflow_dispatch`）。`forecast-daily` 的 `schedule` 同樣可能延遲或被略過；超過 2 小時就不發當天的卡。若要穩定，可讓同一個外部服務在 UTC 00:20 呼叫這個工作流程的 `workflow_dispatch`（不帶 `init_branch`）；兩種觸發同一天都跑也沒關係，第二次會因為「當天已發布」直接略過。
+**觸發方式（2026-11-21 決定）**：`forecast-daily.yml` **沒有 `schedule`**，只由外部服務 cron-job.org 在每天 Asia/Taipei 08:20（＝UTC 00:20）呼叫 `workflow_dispatch`（不帶 `init_branch`）。原因：GitHub 內建排程在這個倉庫實測會延遲數小時（11-19～21 分別在 07:26、07:16、07:07 UTC 觸發），一定被「快照不在 UTC 00 時」或「超過 2 小時」的規則拒絕，只會每天多一封失敗通知。代價：外部觸發沒來，那天就沒有卡（不補發）；要知道有沒有漏，看 `forecasts` 分支的登記簿或 Actions 紀錄。同一天重複呼叫沒關係，第二次會因為「當天已發布」直接略過。
 
 在第 5 步之前，排程每天都會被略過（`daily` 工作的條件是這個變數為 `true`），不會寫入任何東西。
 

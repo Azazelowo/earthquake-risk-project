@@ -4,21 +4,23 @@
 #   - 預報卡的價值在「預先登記」，第一張標準卡一旦發布就不能收回。規格 §13 的發布前檢查清單沒有全部通過之前，
 #     這個工作流程不會發任何東西：每日工作只在倉庫變數 FORECAST_ISSUE_ENABLED 為 true 時才執行，預設沒有這個變數。
 #   - forecasts 分支必須是「只能新增」的：建立後要先到 GitHub 設定分支保護（禁止強制推送、禁止刪除），
-#     再打開總開關。所以建立分支是手動觸發（init_branch），排程不會自己建。
+#     再打開總開關。所以建立分支是手動觸發（init_branch），每日觸發不會自己建。
 #   - 和 hourly-feed 不同，這裡**絕對不能強制推送**：feed 分支每小時只留一個提交，forecasts 分支要留下完整歷史。
 #
 # 每日工作做什麼（UTC 00:20，台北 08:20）：
 #   1. 讀 feed 分支累積的暫時事件與抓取紀錄，重算到最近的 15 分鐘快照（live_update；UTC 00 時內，通常是 00:15）
 #   2. 發布標準卡（forecast_card）。快照發布時間距現在超過 2 小時就不發，缺漏留在紀錄裡，不事後補算
-#   3. 裁決到期的卡：速判（forecast_resolve resolve）。定判要手動匯入 GDMS 正式目錄，不在排程裡
+#   3. 裁決到期的卡：速判（forecast_resolve resolve）。定判要手動匯入 GDMS 正式目錄，不在每日工作裡
 #   4. 重算計分與模型狀態，寫成 scores/speed.json（速判，標「暫時」）
 #   5. 驗證兩條雜湊鏈，再一般推送到 forecasts 分支
 # 需要的 Secret：CWA_API_KEY（和 hourly-feed 相同；沒設的話速判會全部標「可能漏事件」）。
 name: Forecast daily
 
 on:
-  schedule:
-    - cron: "20 0 * * *"   # GitHub 的排程可能延遲數分鐘到數十分鐘；超過 2 小時就不發當天的卡
+  # 沒有 schedule：觸發只由外部服務（cron-job.org，Asia/Taipei 08:20＝UTC 00:20）呼叫 workflow_dispatch。
+  # GitHub 內建排程在這個倉庫實測會延遲數小時（2026-11-19～21 的觸發分別落在 07:26、07:16、07:07 UTC），
+  # 一定會被「快照不在 UTC 00 時／超過 2 小時」的規則拒絕，只會每天多一封失敗通知，沒有備援價值。
+  # 如果外部觸發沒來，那天就沒有卡（缺漏留在紀錄裡，不補發）。
   workflow_dispatch:
     inputs:
       init_branch:
@@ -104,7 +106,7 @@ jobs:
 
       - name: Issue today's standard cards
         id: issue
-        continue-on-error: true      # 失敗（例如排程延遲太久）不能擋住裁決與計分，最後一步會讓整個工作失敗
+        continue-on-error: true      # 失敗（例如觸發延遲太久）不能擋住裁決與計分，最後一步會讓整個工作失敗
         env:
           PYTHONUTF8: "1"
         run: python app/forecast_card.py --registry forecasts-branch/registry --data work

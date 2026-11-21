@@ -89,6 +89,7 @@ python -m unittest discover -s pipeline/tests
 | 專案現況與歷史脈絡 | [`docs/PROJECT_OVERVIEW.md`](docs/PROJECT_OVERVIEW.md)、[`docs/專案現況白話報告.md`](docs/專案現況白話報告.md) |
 | 模型與回測結果 | [`docs/reports/hazard_v1/README.md`](docs/reports/hazard_v1/README.md) |
 | 審查發現與待辦 | [`docs/audit/2026-11-17_全面審查.md`](docs/audit/2026-11-17_全面審查.md) |
+| 前兆與斷層資料的盤點、來源查證、展示檔 | [`docs/phase2/precursor_sources.md`](docs/phase2/precursor_sources.md) |
 | 預報卡規格（預先登記、計分、失效標準） | [`docs/phase2/forecast_card_spec.md`](docs/phase2/forecast_card_spec.md) |
 | 系統分析與設計文件 | `docs/sad/`、`docs/uml/` |
 | 協作規則與技能 | [`AGENTS.md`](AGENTS.md)、[`SKILLS.md`](SKILLS.md) |

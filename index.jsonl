@@ -11,3 +11,4 @@
 {"report_date": "2026-11-18", "revision": "25964590ddea2204", "report_cutoff": "2026-11-18T06:00:02+08:00", "archived_at": "2026-11-18T04:41:05+00:00", "files_ok": 45, "files_failed": 0, "bytes": 2761589}
 {"report_date": "2026-11-19", "revision": "e8f7c25375b60898", "report_cutoff": "2026-11-19T05:58:54+08:00", "archived_at": "2026-11-19T04:26:54+00:00", "files_ok": 39, "files_failed": 0, "bytes": 2463363}
 {"report_date": "2026-11-20", "revision": "15b65e7d918c7b68", "report_cutoff": "2026-11-20T06:04:32+08:00", "archived_at": "2026-11-20T04:13:04+00:00", "files_ok": 23, "files_failed": 0, "bytes": 1683404}
+{"report_date": "2026-11-21", "revision": "29229ab063a04e36", "report_cutoff": "2026-11-21T06:01:54+08:00", "archived_at": "2026-11-21T04:14:12+00:00", "files_ok": 25, "files_failed": 0, "bytes": 1767445}
